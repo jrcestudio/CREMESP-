@@ -23,8 +23,16 @@ Os demais arquivos (`main.tsx`, `index.css`, configs) só montam o projeto.
 - Não é possível aprovar um evento com item acima do saldo disponível.
 - Cada evento tem um campo de **protocolo interno do Cremesp** (e data de recebimento do orçamento), preenchido na aba Ordem
   depois que o fornecedor responde. Ele aparece no cabeçalho do documento e no resumo para WhatsApp/e-mail.
-- Os dados ficam salvos no navegador (`localStorage`). Use *Exportar backup* na Configuração para guardar uma cópia
-  ou levar para outro computador.
+- Sem Supabase configurado, os dados ficam salvos no navegador (`localStorage`). Use *Exportar backup* na Configuração
+  para guardar uma cópia ou levar para outro computador.
+
+## Uso compartilhado pelo setor
+
+Com as variáveis `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` definidas, o sistema pede login (e-mail e senha),
+guarda os dados no Supabase e sincroniza em tempo real entre todos os membros. O passo a passo está em
+[COMPARTILHAR-COM-O-SETOR.md](COMPARTILHAR-COM-O-SETOR.md) e o script do banco em [`supabase/configurar.sql`](supabase/configurar.sql).
+
+Sem essas variáveis (por exemplo, o arquivo único `dist-single/index.html`), funciona sozinho no navegador.
 
 ## Rodar e publicar
 

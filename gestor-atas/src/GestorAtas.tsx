@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import logoCremesp from './assets/logo-cremesp.png';
 import iconeCremesp from './assets/icone-cremesp.png';
@@ -18,6 +20,11 @@ import {
   Layers,
   LayoutDashboard,
   Lock,
+  LogOut,
+  Users,
+  Cloud,
+  CloudOff,
+  Loader2,
   MapPin,
   Package,
   Pencil,
@@ -709,8 +716,19 @@ function Dialogo({ config, fechar }: { config: DialogoConfig | null; fechar: () 
 
 // ---------------------------------------------------------------- Aplicação
 
-export default function GestorAtas() {
-  const [base, setBase] = useState<Base>(carregarBase);
+function AppGestor({
+  base,
+  setBase,
+  compartilhado = false,
+  painelConta,
+  painelEquipe,
+}: {
+  base: Base;
+  setBase: Dispatch<SetStateAction<Base>>;
+  compartilhado?: boolean;
+  painelConta?: ReactNode;
+  painelEquipe?: ReactNode;
+}) {
   const [aba, setAba] = useState<Aba>('dashboard');
   const [eventoSelId, setEventoSelId] = useState<string>(() => {
     const b = base;
@@ -719,14 +737,6 @@ export default function GestorAtas() {
   const [toast, setToast] = useState<{ texto: string; tipo: 'ok' | 'erro' } | null>(null);
   const [dialogo, setDialogo] = useState<DialogoConfig | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(CHAVE_STORAGE, JSON.stringify(base));
-    } catch {
-      /* armazenamento indisponível: segue só em memória */
-    }
-  }, [base]);
 
   const avisar = (texto: string, tipo: 'ok' | 'erro' = 'ok') => {
     setToast({ texto, tipo });
@@ -866,6 +876,7 @@ export default function GestorAtas() {
             </button>
           ))}
         </nav>
+        {painelConta && <div className="mx-3">{painelConta}</div>}
         <div className="m-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
           <p className="font-semibold text-slate-800">{ata.numero || 'Ata sem número'}</p>
           <p className="mt-0.5 line-clamp-2 text-slate-500">{ata.fornecedor || 'Fornecedor não informado'}</p>
@@ -899,6 +910,7 @@ export default function GestorAtas() {
             <p className="truncate text-xs text-slate-500">{ata.numero} · {ata.fornecedor}</p>
           </div>
         </div>
+        {painelConta && <div className="px-4 pb-2">{painelConta}</div>}
         <nav className="grid grid-cols-4 border-t border-slate-100">
           {ABAS.map((a) => (
             <button
@@ -972,6 +984,8 @@ export default function GestorAtas() {
               usoTotal={usoTotal}
               avisar={avisar}
               abrirDialogo={setDialogo}
+              compartilhado={compartilhado}
+              painelEquipe={painelEquipe}
               aoRestaurar={(b) => setEventoSelId((b.eventos.find((e) => e.status === 'simulacao') ?? b.eventos[0])?.id ?? '')}
             />
           )}
@@ -2176,6 +2190,8 @@ function ConfigAba({
   avisar,
   abrirDialogo,
   aoRestaurar,
+  compartilhado,
+  painelEquipe,
 }: {
   base: Base;
   setBase: Dispatch<SetStateAction<Base>>;
@@ -2183,7 +2199,10 @@ function ConfigAba({
   avisar: (t: string, tipo?: 'ok' | 'erro') => void;
   abrirDialogo: (d: DialogoConfig) => void;
   aoRestaurar: (b: Base) => void;
+  compartilhado?: boolean;
+  painelEquipe?: ReactNode;
 }) {
+  const avisoSetor = compartilhado ? ' A mudança vale para todo o setor.' : '';
   const { ata, modulos, itens, eventos } = base;
   const [filtroModulo, setFiltroModulo] = useState('todos');
   const [busca, setBusca] = useState('');
@@ -2278,7 +2297,7 @@ function ConfigAba({
       mensagem: (
         <p>
           Todos os dados atuais (Ata, módulos, itens e eventos) serão substituídos pelos 77 itens da ARP nº 0099/2025 (REDXCORP), com os preços do 1º Termo Aditivo (2026–2027), sem nenhum evento. Exporte
-          um backup antes se quiser guardar o que está aqui.
+          um backup antes se quiser guardar o que está aqui.{avisoSetor}
         </p>
       ),
       aoConfirmar: () => {
@@ -2294,7 +2313,7 @@ function ConfigAba({
       titulo: 'Começar uma Ata em branco?',
       variante: 'perigo',
       confirmar: 'Apagar e começar do zero',
-      mensagem: <p>Todos os módulos, itens e eventos serão apagados. Os dados do contratante são mantidos.</p>,
+      mensagem: <p>Todos os módulos, itens e eventos serão apagados. Os dados do contratante são mantidos.{avisoSetor}</p>,
       aoConfirmar: () => {
         const b = criarBaseVazia();
         setBase((atual) => ({ ...b, ata: { ...b.ata, contratante: atual.ata.contratante, gestor: atual.ata.gestor, fiscal: atual.ata.fiscal, cnpjContratante: atual.ata.cnpjContratante, enderecoContratante: atual.ata.enderecoContratante, uasg: atual.ata.uasg, cidade: atual.ata.cidade } }));
@@ -2488,6 +2507,8 @@ function ConfigAba({
         </Card>
       </div>
 
+      {painelEquipe}
+
       <Card>
         <CardHeader
           titulo="Itens da Ata"
@@ -2622,3 +2643,488 @@ const CSS_IMPRESSAO = `
   * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 }
 `;
+
+/* ============================================================================
+ * Modo compartilhado (Supabase)
+ * Com VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY definidas, o sistema exige
+ * login (e-mail e senha), guarda tudo na tabela `registros` e sincroniza em tempo
+ * real entre todos os membros. Sem elas, funciona sozinho no navegador.
+ * ========================================================================== */
+
+type Colecao = 'ata' | 'modulos' | 'itens' | 'eventos';
+interface Registro {
+  colecao: Colecao;
+  id: string;
+  ordem: number;
+  dados: unknown;
+}
+type StatusSync = 'sincronizado' | 'salvando' | 'erro';
+
+const SUPABASE_URL = (import.meta.env.VITE_SUPABASE_URL as string | undefined)?.trim() ?? '';
+const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined)?.trim() ?? '';
+const supabase: SupabaseClient | null = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
+
+const chaveRegistro = (c: string, id: string) => `${c}:${id}`;
+
+function baseParaRegistros(b: Base): Map<string, Registro> {
+  const m = new Map<string, Registro>();
+  m.set(chaveRegistro('ata', 'principal'), { colecao: 'ata', id: 'principal', ordem: 0, dados: b.ata });
+  b.modulos.forEach((x, i) => m.set(chaveRegistro('modulos', x.id), { colecao: 'modulos', id: x.id, ordem: i, dados: x }));
+  b.itens.forEach((x, i) => m.set(chaveRegistro('itens', x.id), { colecao: 'itens', id: x.id, ordem: i, dados: x }));
+  b.eventos.forEach((x, i) => m.set(chaveRegistro('eventos', x.id), { colecao: 'eventos', id: x.id, ordem: i, dados: x }));
+  return m;
+}
+
+const assinatura = (r: Registro) => JSON.stringify([r.ordem, r.dados]);
+
+function registrosParaBase(lista: Registro[]): Base {
+  const ord = (c: Colecao) => lista.filter((r) => r.colecao === c).sort((a, b) => a.ordem - b.ordem || a.id.localeCompare(b.id));
+  const ata = ord('ata')[0]?.dados as AtaInfo | undefined;
+  return normalizarBase({
+    versao: 1,
+    ata: ata ?? criarBaseVazia().ata,
+    modulos: ord('modulos').map((r) => r.dados as Modulo),
+    itens: ord('itens').map((r) => r.dados as ItemAta),
+    eventos: ord('eventos').map((r) => r.dados as Evento),
+  });
+}
+
+/** Aplica no estado local uma linha que mudou no servidor (ou foi apagada). */
+function aplicarRegistro(b: Base, colecao: Colecao, id: string, reg: Registro | null): Base {
+  if (colecao === 'ata') return reg ? { ...b, ata: { ...criarBaseVazia().ata, ...(reg.dados as AtaInfo) } } : b;
+  const lista = b[colecao] as { id: string }[];
+  const sem = lista.filter((x) => x.id !== id);
+  if (!reg) return { ...b, [colecao]: sem };
+  const pos = Math.min(Math.max(0, reg.ordem), sem.length);
+  const nova = [...sem.slice(0, pos), reg.dados as { id: string }, ...sem.slice(pos)];
+  return { ...b, [colecao]: nova };
+}
+
+function useSincronizacao(cliente: SupabaseClient, base: Base, setBase: Dispatch<SetStateAction<Base>>, sincronizadoInicial: Map<string, string>) {
+  const sincronizado = useRef(sincronizadoInicial);
+  const baseRef = useRef(base);
+  baseRef.current = base;
+  const [status, setStatus] = useState<StatusSync>('sincronizado');
+  const enviando = useRef(false);
+  const timer = useRef<number | undefined>(undefined);
+
+  const enviar = useCallback(async () => {
+    if (enviando.current) return;
+    const atual = baseParaRegistros(baseRef.current);
+    const alterados: Registro[] = [];
+    for (const [k, r] of atual) if (sincronizado.current.get(k) !== assinatura(r)) alterados.push(r);
+    const removidos: { colecao: string; id: string; k: string }[] = [];
+    for (const k of sincronizado.current.keys()) {
+      if (!atual.has(k)) {
+        const i = k.indexOf(':');
+        removidos.push({ colecao: k.slice(0, i), id: k.slice(i + 1), k });
+      }
+    }
+    if (alterados.length === 0 && removidos.length === 0) {
+      setStatus('sincronizado');
+      return;
+    }
+    enviando.current = true;
+    setStatus('salvando');
+    try {
+      if (alterados.length) {
+        const { error } = await cliente.from('registros').upsert(alterados.map((r) => ({ colecao: r.colecao, id: r.id, ordem: r.ordem, dados: r.dados })));
+        if (error) throw error;
+        for (const r of alterados) sincronizado.current.set(chaveRegistro(r.colecao, r.id), assinatura(r));
+      }
+      for (const c of new Set(removidos.map((r) => r.colecao))) {
+        const ids = removidos.filter((r) => r.colecao === c).map((r) => r.id);
+        const { error } = await cliente.from('registros').delete().eq('colecao', c).in('id', ids);
+        if (error) throw error;
+      }
+      for (const r of removidos) sincronizado.current.delete(r.k);
+      enviando.current = false;
+      // Pode ter havido novas edições durante o envio
+      const pendente = [...baseParaRegistros(baseRef.current)].some(([k, r]) => sincronizado.current.get(k) !== assinatura(r));
+      if (pendente) void enviar();
+      else setStatus('sincronizado');
+    } catch {
+      enviando.current = false;
+      setStatus('erro');
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => void enviar(), 5000);
+    }
+  }, [cliente]);
+
+  // Envia as alterações locais pouco depois de cada edição
+  useEffect(() => {
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => void enviar(), 600);
+    return () => window.clearTimeout(timer.current);
+  }, [base, enviar]);
+
+  // Recebe as alterações dos colegas em tempo real
+  useEffect(() => {
+    const canal = cliente
+      .channel('registros-gestor')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'registros' }, (payload) => {
+        const novo = payload.new as Partial<Registro> | null;
+        const antigo = payload.old as Partial<Registro> | null;
+        const colecao = (novo?.colecao ?? antigo?.colecao) as Colecao | undefined;
+        const id = novo?.id ?? antigo?.id;
+        if (!colecao || !id) return;
+        const k = chaveRegistro(colecao, id);
+        const local = baseParaRegistros(baseRef.current).get(k);
+        const sujo = !!local && sincronizado.current.get(k) !== assinatura(local);
+        if (payload.eventType === 'DELETE') {
+          sincronizado.current.delete(k);
+          if (!sujo) setBase((b) => aplicarRegistro(b, colecao, id, null));
+          return;
+        }
+        const reg: Registro = { colecao, id, ordem: novo?.ordem ?? 0, dados: novo?.dados };
+        sincronizado.current.set(k, assinatura(reg));
+        if (sujo) return; // há edição local pendente nesta linha: a versão local será enviada
+        if (local && assinatura(local) === assinatura(reg)) return;
+        setBase((b) => aplicarRegistro(b, colecao, id, reg));
+      })
+      .subscribe();
+    return () => {
+      void cliente.removeChannel(canal);
+    };
+  }, [cliente, setBase]);
+
+  // Avisa antes de fechar com alterações ainda não enviadas
+  useEffect(() => {
+    const h = (e: BeforeUnloadEvent) => {
+      if (status !== 'sincronizado') {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', h);
+    return () => window.removeEventListener('beforeunload', h);
+  }, [status]);
+
+  return status;
+}
+
+function TelaCentral({ children }: { children: ReactNode }) {
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
+      <div className="w-full max-w-sm">
+        <div className="mb-6 flex justify-center">
+          <img src={logoCremesp} alt="Cremesp" className="h-12 w-auto" />
+        </div>
+        <Card className="p-6">{children}</Card>
+      </div>
+    </div>
+  );
+}
+
+function TelaLogin({ cliente }: { cliente: SupabaseClient }) {
+  const [modo, setModo] = useState<'entrar' | 'criar'>('entrar');
+  const [email, setEmail] = useState('');
+  const [senha, setSenha] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [msg, setMsg] = useState<{ tipo: 'erro' | 'ok'; texto: string } | null>(null);
+
+  const traduzir = (m: string) =>
+    /invalid login credentials/i.test(m)
+      ? 'E-mail ou senha incorretos.'
+      : /already registered/i.test(m)
+        ? 'Esse e-mail já tem senha. Use “Entrar”.'
+        : /at least 6/i.test(m)
+          ? 'A senha precisa ter pelo menos 6 caracteres.'
+          : m;
+
+  const enviar = async () => {
+    const e = email.trim().toLowerCase();
+    if (!e.includes('@') || senha.length < 6) {
+      setMsg({ tipo: 'erro', texto: 'Informe o e-mail e uma senha com pelo menos 6 caracteres.' });
+      return;
+    }
+    setEnviando(true);
+    setMsg(null);
+    if (modo === 'entrar') {
+      const { error } = await cliente.auth.signInWithPassword({ email: e, password: senha });
+      if (error) setMsg({ tipo: 'erro', texto: traduzir(error.message) });
+    } else {
+      const { data, error } = await cliente.auth.signUp({ email: e, password: senha, options: { emailRedirectTo: window.location.origin + window.location.pathname } });
+      if (error) setMsg({ tipo: 'erro', texto: traduzir(error.message) });
+      else if (!data.session) setMsg({ tipo: 'ok', texto: 'Conta criada. Confirme pelo link enviado ao seu e-mail e depois entre.' });
+    }
+    setEnviando(false);
+  };
+
+  return (
+    <TelaCentral>
+      <h1 className="text-base font-semibold text-slate-900">Gestor de Atas</h1>
+      <div className="mt-4 grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-sm font-medium">
+        {(['entrar', 'criar'] as const).map((m) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => {
+              setModo(m);
+              setMsg(null);
+            }}
+            className={`rounded-md py-1.5 ${modo === m ? 'bg-white text-cremesp-800 shadow-sm' : 'text-slate-500'}`}
+          >
+            {m === 'entrar' ? 'Entrar' : 'Primeiro acesso'}
+          </button>
+        ))}
+      </div>
+      <p className="mt-3 text-sm text-slate-500">
+        {modo === 'entrar' ? 'Use o e-mail e a senha que você criou.' : 'Crie sua senha. Seu e-mail precisa ter sido autorizado pelo setor.'}
+      </p>
+      <form
+        className="mt-4 space-y-3"
+        onSubmit={(ev) => {
+          ev.preventDefault();
+          void enviar();
+        }}
+      >
+        <Campo rotulo="E-mail">
+          <input id="email-login" type="email" required autoComplete="email" className={inputCls} value={email} placeholder="nome@cremesp.org.br" onChange={(ev) => setEmail(ev.target.value)} />
+        </Campo>
+        <Campo rotulo={modo === 'entrar' ? 'Senha' : 'Crie uma senha (mínimo 6 caracteres)'}>
+          <input
+            id="senha-login"
+            type="password"
+            required
+            minLength={6}
+            autoComplete={modo === 'entrar' ? 'current-password' : 'new-password'}
+            className={inputCls}
+            value={senha}
+            onChange={(ev) => setSenha(ev.target.value)}
+          />
+        </Campo>
+        {msg && <p className={`text-sm ${msg.tipo === 'erro' ? 'text-rose-700' : 'text-cremesp-800'}`}>{msg.texto}</p>}
+        <button type="submit" disabled={enviando} className="flex w-full items-center justify-center gap-2 rounded-lg bg-cremesp-700 px-3.5 py-2 text-sm font-medium text-white hover:bg-cremesp-800 disabled:opacity-60">
+          {enviando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Lock className="h-4 w-4" />}
+          {modo === 'entrar' ? 'Entrar' : 'Criar senha e entrar'}
+        </button>
+      </form>
+      <p className="mt-5 text-xs text-slate-400">Só e-mails autorizados pelo setor conseguem ver os dados. Esqueceu a senha? Peça ao responsável pelo sistema para redefinir.</p>
+    </TelaCentral>
+  );
+}
+
+function PainelConta({ email, status, sair }: { email: string; status: StatusSync; sair: () => void }) {
+  const estilo: Record<StatusSync, { txt: string; cls: string; icone: ReactNode }> = {
+    sincronizado: { txt: 'Salvo para o setor', cls: 'text-cremesp-700', icone: <Cloud className="h-3.5 w-3.5" /> },
+    salvando: { txt: 'Salvando…', cls: 'text-slate-500', icone: <Loader2 className="h-3.5 w-3.5 animate-spin" /> },
+    erro: { txt: 'Sem conexão, tentando de novo', cls: 'text-rose-700', icone: <CloudOff className="h-3.5 w-3.5" /> },
+  };
+  const e = estilo[status];
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs">
+      <div className="min-w-0">
+        <p className={`flex items-center gap-1.5 font-medium ${e.cls}`}>
+          {e.icone}
+          {e.txt}
+        </p>
+        <p className="truncate text-slate-500" title={email}>
+          {email}
+        </p>
+      </div>
+      <button onClick={sair} className="shrink-0 rounded p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="Sair" aria-label="Sair">
+        <LogOut className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail: string }) {
+  const [membros, setMembros] = useState<{ email: string; adicionado_por: string | null }[]>([]);
+  const [novo, setNovo] = useState('');
+  const [msg, setMsg] = useState('');
+  const carregar = useCallback(async () => {
+    const { data } = await cliente.from('membros').select('email, adicionado_por').order('email');
+    setMembros(data ?? []);
+  }, [cliente]);
+  useEffect(() => {
+    void carregar();
+  }, [carregar]);
+  const adicionar = async () => {
+    const e = novo.trim().toLowerCase();
+    if (!e.includes('@')) return;
+    const { error } = await cliente.from('membros').insert({ email: e, adicionado_por: meuEmail });
+    setMsg(error ? (error.code === '23505' ? 'Esse e-mail já tem acesso.' : `Erro: ${error.message}`) : `${e} agora tem acesso. Envie o link do sistema: no primeiro acesso a pessoa cria a senha.`);
+    if (!error) setNovo('');
+    void carregar();
+  };
+  const remover = async (e: string) => {
+    if (e === meuEmail) {
+      setMsg('Você não pode remover o seu próprio acesso.');
+      return;
+    }
+    const { error } = await cliente.from('membros').delete().eq('email', e);
+    setMsg(error ? `Erro: ${error.message}` : `Acesso de ${e} removido.`);
+    void carregar();
+  };
+  return (
+    <Card>
+      <CardHeader titulo="Equipe com acesso" subtitulo="Quem pode entrar e editar. Todos veem os mesmos dados em tempo real." icone={<Users className="h-4 w-4" />} />
+      <div className="grid gap-4 p-5 lg:grid-cols-2">
+        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+          {membros.map((m) => (
+            <li key={m.email} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+              <span className="min-w-0 truncate text-slate-800">
+                {m.email}
+                {m.email === meuEmail && <span className="ml-2 text-xs text-slate-400">(você)</span>}
+              </span>
+              {m.email !== meuEmail && (
+                <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => void remover(m.email)} aria-label={`Remover ${m.email}`}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </li>
+          ))}
+          {membros.length === 0 && <li className="px-3 py-2 text-sm text-slate-500">Carregando…</li>}
+        </ul>
+        <div>
+          <div className="flex gap-2">
+            <input
+              id="novo-membro"
+              type="email"
+              className={inputCls}
+              placeholder="email.do.colega@cremesp.org.br"
+              value={novo}
+              onChange={(e) => setNovo(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && void adicionar()}
+            />
+            <Botao variante="primario" icone={<Plus className="h-4 w-4" />} onClick={() => void adicionar()} disabled={!novo.includes('@')}>
+              Dar acesso
+            </Botao>
+          </div>
+          {msg && <p className="mt-2 text-sm text-slate-600">{msg}</p>}
+          <p className="mt-3 text-xs text-slate-500">Depois de dar acesso, envie o endereço do sistema para a pessoa. No primeiro acesso ela cria a própria senha.</p>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function AppCompartilhado({ cliente, sessao, inicial, sincronizadoInicial }: { cliente: SupabaseClient; sessao: Session; inicial: Base; sincronizadoInicial: Map<string, string> }) {
+  const [base, setBase] = useState<Base>(inicial);
+  const status = useSincronizacao(cliente, base, setBase, sincronizadoInicial);
+  const email = sessao.user.email ?? '';
+  return (
+    <AppGestor
+      base={base}
+      setBase={setBase}
+      compartilhado
+      painelConta={<PainelConta email={email} status={status} sair={() => void cliente.auth.signOut()} />}
+      painelEquipe={<PainelEquipe cliente={cliente} meuEmail={email.toLowerCase()} />}
+    />
+  );
+}
+
+function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
+  const [sessao, setSessao] = useState<Session | null | undefined>(undefined);
+  const [carga, setCarga] = useState<
+    | { tipo: 'carregando' }
+    | { tipo: 'sem-acesso' }
+    | { tipo: 'erro'; msg: string }
+    | { tipo: 'pronto'; base: Base; sinc: Map<string, string> }
+  >({ tipo: 'carregando' });
+
+  useEffect(() => {
+    void cliente.auth.getSession().then(({ data }) => setSessao(data.session));
+    const { data } = cliente.auth.onAuthStateChange((_e, s) => setSessao(s));
+    return () => data.subscription.unsubscribe();
+  }, [cliente]);
+
+  const userId = sessao?.user.id;
+  useEffect(() => {
+    if (!userId) return;
+    let ativo = true;
+    setCarga({ tipo: 'carregando' });
+    (async () => {
+      const { data: membro, error: e1 } = await cliente.rpc('eh_membro');
+      if (e1) throw e1;
+      if (!membro) {
+        if (ativo) setCarga({ tipo: 'sem-acesso' });
+        return;
+      }
+      // Lê em páginas de 1.000 linhas (limite padrão do Supabase)
+      let lista: Registro[] = [];
+      for (let de = 0; ; de += 1000) {
+        const { data, error } = await cliente.from('registros').select('colecao, id, ordem, dados').order('colecao').order('id').range(de, de + 999);
+        if (error) throw error;
+        lista = lista.concat((data ?? []) as Registro[]);
+        if (!data || data.length < 1000) break;
+      }
+      if (lista.length === 0) {
+        // Primeiro acesso do setor: grava a Ata original no banco
+        lista = [...baseParaRegistros(criarBaseExemplo()).values()];
+        const { error: e2 } = await cliente.from('registros').upsert(lista.map((r) => ({ colecao: r.colecao, id: r.id, ordem: r.ordem, dados: r.dados })));
+        if (e2) throw e2;
+      }
+      const base = registrosParaBase(lista);
+      const sinc = new Map<string, string>();
+      for (const r of lista) sinc.set(chaveRegistro(r.colecao, r.id), assinatura(r));
+      if (ativo) setCarga({ tipo: 'pronto', base, sinc });
+    })().catch((err: { message?: string }) => ativo && setCarga({ tipo: 'erro', msg: err?.message ?? String(err) }));
+    return () => {
+      ativo = false;
+    };
+  }, [cliente, userId]);
+
+  if (sessao === undefined) {
+    return (
+      <TelaCentral>
+        <p className="flex items-center gap-2 text-sm text-slate-600">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+        </p>
+      </TelaCentral>
+    );
+  }
+  if (!sessao) return <TelaLogin cliente={cliente} />;
+  if (carga.tipo === 'pronto') return <AppCompartilhado cliente={cliente} sessao={sessao} inicial={carga.base} sincronizadoInicial={carga.sinc} />;
+  return (
+    <TelaCentral>
+      {carga.tipo === 'carregando' && (
+        <p className="flex items-center gap-2 text-sm text-slate-600">
+          <Loader2 className="h-4 w-4 animate-spin" /> Carregando os dados do setor…
+        </p>
+      )}
+      {carga.tipo === 'sem-acesso' && (
+        <>
+          <h1 className="text-base font-semibold text-slate-900">Acesso não liberado</h1>
+          <p className="mt-2 text-sm text-slate-600">
+            O e-mail <strong>{sessao.user.email}</strong> ainda não está na equipe. Peça a quem já usa o sistema para adicioná-lo em Configuração da Ata › Equipe com acesso.
+          </p>
+        </>
+      )}
+      {carga.tipo === 'erro' && (
+        <>
+          <h1 className="text-base font-semibold text-slate-900">Não foi possível carregar</h1>
+          <p className="mt-2 text-sm text-slate-600">Verifique a conexão e tente de novo. Detalhe: {carga.msg}</p>
+        </>
+      )}
+      <div className="mt-5 flex gap-2">
+        {carga.tipo === 'erro' && (
+          <Botao variante="primario" onClick={() => window.location.reload()}>
+            Tentar de novo
+          </Botao>
+        )}
+        <Botao icone={<LogOut className="h-4 w-4" />} onClick={() => void cliente.auth.signOut()}>
+          Sair
+        </Botao>
+      </div>
+    </TelaCentral>
+  );
+}
+
+function ModoLocal() {
+  const [base, setBase] = useState<Base>(carregarBase);
+  useEffect(() => {
+    try {
+      localStorage.setItem(CHAVE_STORAGE, JSON.stringify(base));
+    } catch {
+      /* armazenamento indisponível: segue só em memória */
+    }
+  }, [base]);
+  return <AppGestor base={base} setBase={setBase} />;
+}
+
+export default function GestorAtas() {
+  return supabase ? <ModoCompartilhado cliente={supabase} /> : <ModoLocal />;
+}
