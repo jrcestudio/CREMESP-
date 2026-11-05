@@ -29,7 +29,7 @@ Quem não estiver na lista de membros não vê nada, mesmo criando senha.
 
 1. Abra **Project Settings › Data API** (em algumas versões, **Settings › API**).
 2. Copie o **Project URL** (algo como `https://abcdxyz.supabase.co`).
-3. Em **Project Settings › API Keys**, copie a chave **anon public** (um texto longo que começa com `eyJ`).
+3. Em **Project Settings › API Keys**, copie a **Publishable key** (começa com `sb_publishable_`).
    Essa chave pode ficar no site: a proteção dos dados é feita pelo banco.
 
 ## 4. Publicar na Vercel
@@ -44,7 +44,7 @@ Quem não estiver na lista de membros não vê nada, mesmo criando senha.
    | Name | Value |
    | --- | --- |
    | `VITE_SUPABASE_URL` | o Project URL da etapa 3 |
-   | `VITE_SUPABASE_ANON_KEY` | a chave anon public da etapa 3 |
+   | `VITE_SUPABASE_ANON_KEY` | a Publishable key da etapa 3 |
 
 5. Clique em **Deploy**. Em cerca de um minuto sai o endereço do site.
 
