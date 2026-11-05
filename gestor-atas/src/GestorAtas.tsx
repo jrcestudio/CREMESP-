@@ -4164,7 +4164,7 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
         {eventos.length === 0 ? (
           <Card className="p-10 text-center text-sm text-slate-500">Nenhum evento foi enviado pelo Cremesp ainda. Quando houver, ele aparece aqui.</Card>
         ) : (
-          <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
+          <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)] print:block">
             <Card data-print-hide className="max-h-[75vh] self-start overflow-y-auto pb-2">
               <Secao titulo="Precisa de vocês" lista={grupos.precisa} vazio="Nada pendente." />
               <Secao titulo="Em andamento" lista={grupos.andamento} vazio="Nenhum evento." />
@@ -4175,14 +4175,25 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
               <div className="min-w-0 space-y-5">
                 <div className="hidden border-b-2 border-slate-900 pb-3 print:block">
                   <img src={logoCremesp} alt="Cremesp" className="h-10 w-auto" />
-                  <p className="mt-2 text-sm font-semibold">
-                    Orçamento · OS {evento.numero} · {ata.numero}
-                  </p>
+                  <div className="mt-2 flex items-end justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-semibold">
+                        {evento.status === 'aprovado' ? 'Ordem de Serviço' : 'Orçamento'} · OS {evento.numero}
+                      </p>
+                      <p className="text-xs text-slate-600">
+                        {ata.numero} · {ata.fornecedor}
+                      </p>
+                    </div>
+                    <div className="rounded border border-slate-900 px-3 py-1.5 text-right">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-600">Protocolo interno Cremesp</p>
+                      <p className="text-sm font-semibold tabular-nums">{evento.protocolo?.trim() || 'pendente'}</p>
+                    </div>
+                  </div>
                 </div>
                 <Card>
                   <CardHeader
                     titulo={`OS ${evento.numero} · ${evento.nome}`}
-                    subtitulo={`${periodo(evento)}${evento.local ? ` · ${evento.local}` : ''}${evento.responsavel ? ` · Responsável: ${evento.responsavel}` : ''}`}
+                    subtitulo={`${periodo(evento)}${evento.local ? ` · ${evento.local}` : ''}${evento.responsavel ? ` · Responsável: ${evento.responsavel}` : ''} · Protocolo Cremesp: ${evento.protocolo?.trim() || 'pendente'}`}
                     icone={<CalendarDays className="h-4 w-4" />}
                     acoes={
                       <span data-print-hide className="flex items-center gap-2">
@@ -4266,7 +4277,7 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
                   </div>
                 </Card>
 
-                <div className="grid gap-5 xl:grid-cols-2">
+                <div className="grid gap-5 xl:grid-cols-2 print:block">
                   <Card>
                     <CardHeader titulo="Andamento" subtitulo="Cada etapa registrada pelo Cremesp e por vocês" icone={<ListChecks className="h-4 w-4" />} />
                     <div className="p-5">
