@@ -91,6 +91,8 @@ interface AtaInfo {
   /** Quem autoriza a ordem pelo Cremesp (assinatura) */
   coordenador: string;
   cargoCoordenador: string;
+  /** Responsável técnico padrão dos eventos */
+  responsavelTecnico: string;
   contratante: string;
   cnpjContratante: string;
   enderecoContratante: string;
@@ -298,6 +300,7 @@ const ATA_EXEMPLO: AtaInfo = {
   fiscal: 'Tatiana dos Santos',
   coordenador: 'Alexandre Kataoka',
   cargoCoordenador: 'Coordenador do Departamento de Comunicação',
+  responsavelTecnico: 'John Wellington da Silva Santos',
   contratante: 'CONSELHO REGIONAL DE MEDICINA DO ESTADO DE SÃO PAULO – CREMESP',
   cnpjContratante: '63.106.843/0001-97',
   enderecoContratante: 'Rua Luís Coelho, 26, Consolação, São Paulo/SP, CEP 01309-900',
@@ -1048,7 +1051,7 @@ function AppGestor({
           dataInicio: hoje,
           dataFim: hoje,
           local: '',
-          responsavel: '',
+          responsavel: ata.responsavelTecnico || '',
           status: 'simulacao',
           observacoes: '',
           linhas: {},
@@ -1970,7 +1973,7 @@ function SimuladorAba({
               <Campo rotulo="Responsável técnico" className="sm:col-span-2 lg:col-span-3">
                 <div className="relative">
                   <User className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-                  <input className={`${inputCls} pl-9`} value={evento.responsavel} placeholder="Nome e contato" onChange={(e) => atualizar(evento.id, { responsavel: e.target.value })} />
+                  <input className={`${inputCls} pl-9`} value={evento.responsavel} placeholder={ata.responsavelTecnico || 'Nome e contato'} onChange={(e) => atualizar(evento.id, { responsavel: e.target.value })} />
                 </div>
               </Campo>
             </div>
@@ -2237,7 +2240,8 @@ function OrdemAba({
     linhasTxt.push(`*Evento:* ${evento.nome}`);
     linhasTxt.push(`*Data:* ${periodo(evento)}`);
     if (evento.local) linhasTxt.push(`*Local:* ${evento.local}`);
-    if (evento.responsavel) linhasTxt.push(`*Responsável técnico:* ${evento.responsavel}`);
+    const resp = evento.responsavel || ata.responsavelTecnico;
+    if (resp) linhasTxt.push(`*Responsável técnico:* ${resp}`);
     for (const g of grupos) {
       linhasTxt.push('');
       linhasTxt.push(`*▸ ${g.nome.toUpperCase()}*`);
@@ -2369,7 +2373,7 @@ function OrdemAba({
               <p className="font-semibold">{evento.nome}</p>
               <p>Data: {periodo(evento)} ({diasEntre(evento.dataInicio, evento.dataFim)} {diasEntre(evento.dataInicio, evento.dataFim) === 1 ? 'dia' : 'dias'})</p>
               <p>Local: {evento.local || '—'}</p>
-              <p>Responsável técnico: {evento.responsavel || '—'}</p>
+              <p>Responsável técnico: {evento.responsavel || ata.responsavelTecnico || '—'}</p>
               <p className="text-[11px] text-slate-600">Vigência da Ata: {fmtData(ata.vigenciaInicio)} a {fmtData(ata.vigenciaFim)}</p>
             </div>
           </section>
@@ -2449,7 +2453,7 @@ function OrdemAba({
             </p>
             <div className="grid grid-cols-2 gap-x-10 gap-y-12 text-center text-[10.5px]">
               {[
-                ['Responsável técnico do evento', evento.responsavel || 'Contratante'],
+                ['Responsável técnico do evento', evento.responsavel || ata.responsavelTecnico || 'Contratante'],
                 ['Gestor(a) da Ata', ata.gestor || 'Contratante'],
                 ['Fiscal da Ata', ata.fiscal || 'Contratante'],
                 [ehOS ? 'Ciente – Fornecedor' : 'De acordo – Fornecedor', ata.fornecedor],
@@ -3592,6 +3596,7 @@ function ConfigAba({
               {campoAta('Fiscal da Ata', 'fiscal', 'lg:col-span-2')}
               {campoAta('Coordenador(a) que assina a ordem', 'coordenador', 'lg:col-span-2')}
               {campoAta('Cargo do(a) coordenador(a)', 'cargoCoordenador', 'lg:col-span-2')}
+              {campoAta('Responsável técnico padrão dos eventos', 'responsavelTecnico', 'lg:col-span-2')}
             </div>
           </div>
         </Card>
@@ -4527,7 +4532,7 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
                 <Card>
                   <CardHeader
                     titulo={`OS ${evento.numero} · ${evento.nome}`}
-                    subtitulo={`${periodo(evento)}${evento.local ? ` · ${evento.local}` : ''}${evento.responsavel ? ` · Responsável: ${evento.responsavel}` : ''} · Protocolo Cremesp: ${evento.protocolo?.trim() || 'pendente'}`}
+                    subtitulo={`${periodo(evento)}${evento.local ? ` · ${evento.local}` : ''}${evento.responsavel || ata.responsavelTecnico ? ` · Responsável técnico: ${evento.responsavel || ata.responsavelTecnico}` : ''} · Protocolo Cremesp: ${evento.protocolo?.trim() || 'pendente'}`}
                     icone={<CalendarDays className="h-4 w-4" />}
                     acoes={
                       <span data-print-hide className="flex items-center gap-2">
