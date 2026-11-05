@@ -12,7 +12,9 @@ Os demais arquivos (`main.tsx`, `index.css`, configs) só montam o projeto.
   reajuste IPCA de 4,223450%). Valor global: **R$ 7.747.469,50**, igual ao do termo.
 - Quantidades registradas conforme a Ata original.
 - Gestora (Carolina Gomes Marcelino) e Fiscal (Tatiana dos Santos) conforme o termo aditivo.
-- 3 eventos aprovados e 1 em simulação, **fictícios**, só para a tela abrir com dados. Apague ou edite à vontade.
+- Nenhum evento cadastrado: o sistema começa zerado, pronto para uso. *Restaurar Ata original* (na Configuração)
+  volta a esse estado.
+- Visual com o verde institucional e os logos do Cremesp (`src/assets/`).
 
 ## Como funciona o saldo
 

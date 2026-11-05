@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
+import logoCremesp from './assets/logo-cremesp.png';
+import iconeCremesp from './assets/icone-cremesp.png';
 import {
   AlertTriangle,
   BarChart3,
-  Building2,
   CalendarDays,
   Check,
   CheckCircle2,
@@ -45,7 +46,7 @@ import {
 type Unidade = 'Diária 24h' | 'Diária 8h' | 'Unidade' | 'Metro²' | 'Metro linear' | 'Hora';
 const UNIDADES: Unidade[] = ['Diária 24h', 'Diária 8h', 'Unidade', 'Metro²', 'Metro linear', 'Hora'];
 
-type CorModulo = 'indigo' | 'sky' | 'emerald' | 'amber' | 'rose' | 'violet' | 'teal' | 'orange' | 'slate' | 'fuchsia';
+type CorModulo = 'blue' | 'yellow' | 'cyan' | 'indigo' | 'sky' | 'emerald' | 'amber' | 'rose' | 'violet' | 'teal' | 'orange' | 'slate' | 'fuchsia';
 
 interface Modulo {
   id: string;
@@ -124,6 +125,9 @@ type Aba = 'dashboard' | 'simulador' | 'ordem' | 'config';
 
 const CORES: Record<CorModulo, { dot: string; chip: string; bar: string }> = {
   indigo: { dot: 'bg-indigo-500', chip: 'bg-indigo-50 text-indigo-700 ring-indigo-200', bar: 'bg-indigo-500' },
+  blue: { dot: 'bg-blue-500', chip: 'bg-blue-50 text-blue-700 ring-blue-200', bar: 'bg-blue-500' },
+  yellow: { dot: 'bg-yellow-400', chip: 'bg-yellow-50 text-yellow-800 ring-yellow-200', bar: 'bg-yellow-400' },
+  cyan: { dot: 'bg-cyan-500', chip: 'bg-cyan-50 text-cyan-700 ring-cyan-200', bar: 'bg-cyan-500' },
   sky: { dot: 'bg-sky-500', chip: 'bg-sky-50 text-sky-700 ring-sky-200', bar: 'bg-sky-500' },
   emerald: { dot: 'bg-emerald-500', chip: 'bg-emerald-50 text-emerald-700 ring-emerald-200', bar: 'bg-emerald-500' },
   amber: { dot: 'bg-amber-500', chip: 'bg-amber-50 text-amber-800 ring-amber-200', bar: 'bg-amber-500' },
@@ -166,10 +170,10 @@ const MODULOS_EXEMPLO: Modulo[] = [
   { id: 'estr', nome: 'Estrutura de Palco e Suporte', cor: 'amber' },
   { id: 'cabos', nome: 'Cabos', cor: 'orange' },
   { id: 'audio', nome: 'Sistema de Áudio', cor: 'sky' },
-  { id: 'video', nome: 'Vídeo, Projeção e LED', cor: 'indigo' },
-  { id: 'ilum', nome: 'Iluminação', cor: 'fuchsia' },
+  { id: 'video', nome: 'Vídeo, Projeção e LED', cor: 'blue' },
+  { id: 'ilum', nome: 'Iluminação', cor: 'yellow' },
   { id: 'plat', nome: 'Plataforma, Internet e Energia', cor: 'teal' },
-  { id: 'outros', nome: 'Outros Serviços', cor: 'violet' },
+  { id: 'outros', nome: 'Outros Serviços', cor: 'cyan' },
   { id: 'equipe', nome: 'Efetivo Profissional', cor: 'emerald' },
 ];
 
@@ -261,12 +265,7 @@ const ITENS_SEED: ItemSeed[] = [
 
 const idItem = (codigo: string) => `i${codigo}`;
 
-function linhas(lista: [string, number, number][]): Record<string, LinhaEvento> {
-  const out: Record<string, LinhaEvento> = {};
-  for (const [codigo, qtd, diarias] of lista) out[idItem(codigo)] = { qtd, diarias };
-  return out;
-}
-
+// Ata real pronta para uso: itens e preços do termo aditivo, sem eventos.
 function criarBaseExemplo(): Base {
   const itens: ItemAta[] = ITENS_SEED.map(([codigo, descricao, moduloId, unidade, valorUnitario, qtdContratada]) => ({
     id: idItem(codigo),
@@ -277,85 +276,7 @@ function criarBaseExemplo(): Base {
     valorUnitario,
     qtdContratada,
   }));
-  const agora = new Date().toISOString();
-  const eventos: Evento[] = [
-    {
-      id: 'ev-1',
-      numero: '001/2026',
-      nome: 'Cerimônia de Entrega de Carteiras – Novos Médicos',
-      dataInicio: '2026-11-28',
-      dataFim: '2026-11-28',
-      local: 'Auditório Cremesp – Rua Frei Caneca, 1282, Consolação',
-      responsavel: 'Equipe de Eventos Cremesp',
-      status: 'aprovado',
-      observacoes: 'Montagem no dia anterior a partir das 14h. Passagem de som às 8h. Contato no local: recepção do auditório.',
-      linhas: linhas([
-        ['3', 24, 1], ['8', 60, 1], ['12', 6, 1], ['15', 8, 1], ['16', 1, 1], ['30', 1, 1], ['24', 2, 1],
-        ['32', 1, 1], ['35', 12, 1], ['36', 1, 1], ['53', 1, 1], ['57', 2, 1], ['60', 1, 1], ['63', 1, 1],
-        ['65', 1, 1], ['67', 1, 1],
-      ]),
-      atualizadoEm: agora,
-      confirmadoEm: '2026-11-16T12:00:00.000Z',
-      protocolo: 'EXEMPLO-0001/2026',
-      orcamentoRecebidoEm: '2026-11-12',
-    },
-    {
-      id: 'ev-2',
-      numero: '002/2026',
-      nome: 'Congresso de Bioética e Ética Médica 2027',
-      dataInicio: '2027-03-17',
-      dataFim: '2027-03-19',
-      local: 'Centro de Convenções – São Paulo/SP',
-      responsavel: 'Coordenação de Eventos',
-      status: 'aprovado',
-      observacoes: 'Transmissão ao vivo nos três dias. Montagem do LED na véspera até 22h. Desmontagem após 18h do último dia.',
-      linhas: linhas([
-        ['1', 10, 3], ['13', 13, 3], ['28', 60, 3], ['41', 1, 3], ['42', 1, 3], ['43', 1, 3], ['44', 2, 3],
-        ['45', 1, 3], ['48', 1, 2], ['51', 2, 3], ['54', 1, 3], ['55', 1, 3], ['56', 1, 3], ['62', 2, 3],
-        ['66', 1, 3],
-      ]),
-      atualizadoEm: agora,
-      confirmadoEm: '2026-11-20T12:00:00.000Z',
-      protocolo: 'EXEMPLO-0002/2026',
-      orcamentoRecebidoEm: '2026-11-18',
-    },
-    {
-      id: 'ev-3',
-      numero: '003/2026',
-      nome: 'Fórum Regional – Delegacia de Campinas',
-      dataInicio: '2027-04-15',
-      dataFim: '2027-04-16',
-      local: 'Delegacia Regional de Campinas',
-      responsavel: 'Delegacia Regional',
-      status: 'aprovado',
-      observacoes: 'Duas salas simultâneas com projeção. Acesso para descarga pela lateral do prédio.',
-      linhas: linhas([
-        ['12', 8, 2], ['13', 4, 2], ['15', 6, 2], ['19', 4, 2], ['20', 4, 2], ['44', 1, 2], ['63', 1, 2],
-        ['64', 1, 2],
-      ]),
-      atualizadoEm: agora,
-      confirmadoEm: '2026-11-25T12:00:00.000Z',
-      protocolo: 'EXEMPLO-0003/2026',
-      orcamentoRecebidoEm: '2026-11-23',
-    },
-    {
-      id: 'ev-4',
-      numero: '004/2026',
-      nome: 'Sessão Solene de Encerramento do Ano – Homenagens',
-      dataInicio: '2026-12-10',
-      dataFim: '2026-12-10',
-      local: 'Auditório Cremesp – Rua Frei Caneca, 1282, Consolação',
-      responsavel: 'Equipe de Eventos Cremesp',
-      status: 'simulacao',
-      observacoes: 'Montagem a partir das 7h. Ensaio geral às 15h. Início da cerimônia às 19h. Contato no local: coordenação de eventos.',
-      linhas: linhas([
-        ['13', 3, 1], ['18', 1, 1], ['29', 1, 1], ['31', 2, 1], ['34', 4, 1], ['35', 16, 1], ['37', 2, 1],
-        ['39', 20, 1], ['42', 1, 1], ['49', 2, 1], ['68', 1, 1], ['75', 1, 1],
-      ]),
-      atualizadoEm: agora,
-    },
-  ];
-  return { versao: 1, ata: { ...ATA_EXEMPLO }, modulos: MODULOS_EXEMPLO.map((m) => ({ ...m })), itens, eventos };
+  return { versao: 1, ata: { ...ATA_EXEMPLO }, modulos: MODULOS_EXEMPLO.map((m) => ({ ...m })), itens, eventos: [] };
 }
 
 function criarBaseVazia(): Base {
@@ -524,7 +445,7 @@ async function copiarTexto(texto: string): Promise<boolean> {
 
 // ---------------------------------------------------------------- Persistência
 
-const CHAVE_STORAGE = 'gestor-atas-cremesp:v2';
+const CHAVE_STORAGE = 'gestor-atas-cremesp:v3';
 
 // Garante que backups antigos tenham todos os campos atuais da Ata
 function normalizarBase(b: Base): Base {
@@ -609,7 +530,7 @@ function CardHeader({ titulo, subtitulo, icone, acoes }: { titulo: string; subti
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
       <div className="flex items-start gap-3">
-        {icone && <div className="mt-0.5 rounded-lg bg-indigo-50 p-2 text-indigo-700">{icone}</div>}
+        {icone && <div className="mt-0.5 rounded-lg bg-cremesp-50 p-2 text-cremesp-700">{icone}</div>}
         <div>
           <h3 className="text-sm font-semibold text-slate-900">{titulo}</h3>
           {subtitulo && <p className="mt-0.5 text-xs text-slate-500">{subtitulo}</p>}
@@ -641,7 +562,7 @@ function Botao({
   tamanho?: 'sm' | 'md';
 }) {
   const estilos: Record<VarianteBotao, string> = {
-    primario: 'bg-indigo-700 text-white hover:bg-indigo-800 shadow-sm',
+    primario: 'bg-cremesp-700 text-white hover:bg-cremesp-800 shadow-sm',
     secundario: 'bg-white text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50',
     perigo: 'bg-white text-rose-700 ring-1 ring-inset ring-rose-200 hover:bg-rose-50',
     sucesso: 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-sm',
@@ -672,9 +593,9 @@ function Campo({ rotulo, children, className = '' }: { rotulo: string; children:
 }
 
 const inputCls =
-  'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-slate-50 disabled:text-slate-500';
+  'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-cremesp-500 focus:outline-none focus:ring-2 focus:ring-cremesp-500/20 disabled:bg-slate-50 disabled:text-slate-500';
 const inputSmCls =
-  'w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 disabled:bg-slate-50 disabled:text-slate-500';
+  'w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 focus:border-cremesp-500 focus:outline-none focus:ring-2 focus:ring-cremesp-500/20 disabled:bg-slate-50 disabled:text-slate-500';
 
 function NumeroInput({
   valor,
@@ -721,7 +642,7 @@ function BarraProgresso({ consumido, simulacao, total, nivel }: { consumido: num
     <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100" title={`Consumido ${pct(pc)} · Em simulação ${pct(ps)}`}>
       <div className="flex h-full">
         <div className={`${ESTILO_NIVEL[nivel].barra} h-full`} style={{ width: `${pc}%` }} />
-        <div className="h-full bg-indigo-300 bg-[repeating-linear-gradient(45deg,transparent,transparent_3px,rgba(255,255,255,.5)_3px,rgba(255,255,255,.5)_6px)]" style={{ width: `${ps}%` }} />
+        <div className="h-full bg-cremesp-300 bg-[repeating-linear-gradient(45deg,transparent,transparent_3px,rgba(255,255,255,.5)_3px,rgba(255,255,255,.5)_6px)]" style={{ width: `${ps}%` }} />
       </div>
     </div>
   );
@@ -743,7 +664,7 @@ function StatusBadge({ status }: { status: StatusEvento }) {
       <CheckCircle2 className="h-3 w-3" /> Aprovado
     </span>
   ) : (
-    <span className="inline-flex items-center gap-1 rounded-full bg-indigo-50 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 ring-1 ring-inset ring-indigo-200">
+    <span className="inline-flex items-center gap-1 rounded-full bg-cremesp-50 px-2 py-0.5 text-[11px] font-semibold text-cremesp-700 ring-1 ring-inset ring-cremesp-200">
       <Pencil className="h-3 w-3" /> Em simulação
     </span>
   );
@@ -925,9 +846,7 @@ export default function GestorAtas() {
       {/* Barra lateral (desktop) */}
       <aside data-print-hide className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-200 bg-white lg:flex">
         <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-5">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-700 text-white">
-            <ClipboardCopy className="h-5 w-5" />
-          </div>
+          <img src={iconeCremesp} alt="Cremesp" className="h-10 w-10" />
           <div>
             <p className="text-sm font-semibold leading-tight text-slate-900">Gestor de Atas</p>
             <p className="text-xs text-slate-500">Simulador de Eventos</p>
@@ -939,10 +858,10 @@ export default function GestorAtas() {
               key={a.id}
               onClick={() => setAba(a.id)}
               className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                aba === a.id ? 'bg-indigo-50 text-indigo-800' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                aba === a.id ? 'bg-cremesp-50 text-cremesp-800' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
               }`}
             >
-              <span className={aba === a.id ? 'text-indigo-700' : 'text-slate-400'}>{a.icone}</span>
+              <span className={aba === a.id ? 'text-cremesp-700' : 'text-slate-400'}>{a.icone}</span>
               {a.rotulo}
             </button>
           ))}
@@ -974,9 +893,7 @@ export default function GestorAtas() {
       {/* Barra superior (celular/tablet) */}
       <header data-print-hide className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2 px-4 py-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-700 text-white">
-            <ClipboardCopy className="h-4 w-4" />
-          </div>
+          <img src={iconeCremesp} alt="Cremesp" className="h-8 w-8" />
           <div className="min-w-0">
             <p className="text-sm font-semibold leading-tight">Gestor de Atas</p>
             <p className="truncate text-xs text-slate-500">{ata.numero} · {ata.fornecedor}</p>
@@ -987,7 +904,7 @@ export default function GestorAtas() {
             <button
               key={a.id}
               onClick={() => setAba(a.id)}
-              className={`flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium ${aba === a.id ? 'text-indigo-700' : 'text-slate-500'}`}
+              className={`flex flex-col items-center gap-0.5 py-2 text-[11px] font-medium ${aba === a.id ? 'text-cremesp-700' : 'text-slate-500'}`}
             >
               {a.icone}
               {a.curto}
@@ -1209,7 +1126,7 @@ function DashboardAba({
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <Kpi titulo="Valor total da Ata" valor={brl(financeiro.total)} detalhe={`${itens.length} itens em ${modulos.length} módulos`} icone={<Wallet className="h-4 w-4" />} destaque="bg-indigo-50 text-indigo-700" />
+        <Kpi titulo="Valor total da Ata" valor={brl(financeiro.total)} detalhe={`${itens.length} itens em ${modulos.length} módulos`} icone={<Wallet className="h-4 w-4" />} destaque="bg-cremesp-50 text-cremesp-700" />
         <Kpi
           titulo="Já utilizado"
           valor={brl(financeiro.utilizado)}
@@ -1222,7 +1139,7 @@ function DashboardAba({
           valor={brl(financeiro.simulacao)}
           detalhe={`${pct(pctSim)} da Ata · ${qtdSim} ${qtdSim === 1 ? 'simulação aberta' : 'simulações abertas'}`}
           icone={<Pencil className="h-4 w-4" />}
-          destaque="bg-indigo-50 text-indigo-700"
+          destaque="bg-cremesp-50 text-cremesp-700"
         />
         <Kpi
           titulo="Saldo financeiro restante"
@@ -1339,7 +1256,7 @@ function DashboardAba({
           <button
             onClick={() => setSoUsados((v) => !v)}
             className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium ring-1 ring-inset transition ${
-              soUsados ? 'bg-indigo-700 text-white ring-indigo-700' : 'bg-white text-slate-700 ring-slate-300 hover:bg-slate-50'
+              soUsados ? 'bg-cremesp-700 text-white ring-cremesp-700' : 'bg-white text-slate-700 ring-slate-300 hover:bg-slate-50'
             }`}
           >
             <Filter className="h-4 w-4" />
@@ -1378,7 +1295,7 @@ function DashboardAba({
                   </td>
                   <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{num(l.it.qtdContratada)}</td>
                   <td className="px-3 py-2.5 text-right tabular-nums text-slate-800">{num(l.consumido)}</td>
-                  <td className="px-3 py-2.5 text-right tabular-nums text-indigo-700">{l.simulacao ? num(l.simulacao) : '—'}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-cremesp-700">{l.simulacao ? num(l.simulacao) : '—'}</td>
                   <td className="px-3 py-2.5 text-right">
                     <span className={`font-semibold tabular-nums ${ESTILO_NIVEL[l.nivel].texto}`}>{num(l.restante)}</span>
                     {l.simulacao > 0 && (
@@ -1604,7 +1521,7 @@ function SimuladorAba({
     const excedeLivre = !travado && !excede && pedido > s.livre;
     const nivel = nivelSaldo(s.disponivel - (qtd > 0 ? pedido : 0), it.qtdContratada);
     return (
-      <div key={it.id} className={`px-4 py-3 sm:px-5 ${qtd > 0 ? 'bg-indigo-50/40' : ''}`}>
+      <div key={it.id} className={`px-4 py-3 sm:px-5 ${qtd > 0 ? 'bg-cremesp-50/40' : ''}`}>
         <div className="flex flex-col gap-3 md:flex-row md:items-center">
           <div className="flex min-w-0 flex-1 items-start gap-2">
             <span className="mt-0.5 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-slate-600">{it.codigo}</span>
@@ -1616,7 +1533,7 @@ function SimuladorAba({
                 <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${ESTILO_NIVEL[nivelSaldo(s.disponivel, it.qtdContratada)].chip}`}>
                   Saldo disponível: {num(s.disponivel)} de {num(it.qtdContratada)}
                 </span>
-                {s.reservadoOutros > 0 && <span className="text-indigo-600">{num(s.reservadoOutros)} reservado em outras simulações</span>}
+                {s.reservadoOutros > 0 && <span className="text-cremesp-600">{num(s.reservadoOutros)} reservado em outras simulações</span>}
               </p>
             </div>
           </div>
@@ -1695,7 +1612,7 @@ function SimuladorAba({
                 <div className="inline-flex rounded-lg bg-slate-100 p-1 text-xs font-medium">
                   <button
                     onClick={() => (travado ? reabrir() : undefined)}
-                    className={`rounded-md px-3 py-1.5 ${!travado ? 'bg-white text-indigo-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                    className={`rounded-md px-3 py-1.5 ${!travado ? 'bg-white text-cremesp-700 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
                   >
                     Em Simulação
                   </button>
@@ -1775,7 +1692,7 @@ function SimuladorAba({
                 <input className={`${inputCls} pl-9`} placeholder="Buscar item (ex.: LED, microfone, 28)…" value={busca} onChange={(e) => setBusca(e.target.value)} />
               </div>
               <label className="flex items-center gap-2 text-sm text-slate-600">
-                <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-indigo-600" checked={soSelecionados} onChange={(e) => setSoSelecionados(e.target.checked)} />
+                <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-cremesp-600" checked={soSelecionados} onChange={(e) => setSoSelecionados(e.target.checked)} />
                 Só itens do evento
               </label>
               <Botao tamanho="sm" variante="fantasma" onClick={() => setAbertos(Object.fromEntries(modulos.map((m) => [m.id, true])))}>
@@ -1808,7 +1725,7 @@ function SimuladorAba({
                       </span>
                       {pm && (
                         <span className="flex items-center gap-2 text-xs">
-                          <span className="rounded-full bg-indigo-100 px-2 py-0.5 font-medium text-indigo-700">{pm.itens} no evento</span>
+                          <span className="rounded-full bg-cremesp-100 px-2 py-0.5 font-medium text-cremesp-700">{pm.itens} no evento</span>
                           <span className="font-semibold tabular-nums text-slate-800">{brl(pm.valor)}</span>
                         </span>
                       )}
@@ -1835,10 +1752,10 @@ function SimuladorAba({
         {/* Resumo flutuante */}
         <aside className="xl:sticky xl:top-6 xl:self-start">
           <Card className="overflow-hidden">
-            <div className="bg-indigo-700 px-5 py-4 text-white">
-              <p className="text-xs font-medium uppercase tracking-wide text-indigo-200">Valor total do evento</p>
+            <div className="bg-cremesp-700 px-5 py-4 text-white">
+              <p className="text-xs font-medium uppercase tracking-wide text-cremesp-200">Valor total do evento</p>
               <p className="mt-1 text-3xl font-semibold tabular-nums tracking-tight">{brl(resumo.total)}</p>
-              <p className="mt-1 text-xs text-indigo-200">
+              <p className="mt-1 text-xs text-cremesp-200">
                 {Object.keys(evento.linhas).length} itens · {periodo(evento)}
               </p>
             </div>
@@ -1871,7 +1788,7 @@ function SimuladorAba({
                     <span className="font-semibold text-slate-800">{pct(impactoAta, 2)}</span>
                   </div>
                   <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200">
-                    <div className="h-full bg-indigo-600" style={{ width: `${Math.min(100, impactoAta)}%` }} />
+                    <div className="h-full bg-cremesp-600" style={{ width: `${Math.min(100, impactoAta)}%` }} />
                   </div>
                 </div>
                 <div>
@@ -1880,7 +1797,7 @@ function SimuladorAba({
                     <span className={`font-semibold ${impactoSaldo > 100 ? 'text-rose-700' : 'text-slate-800'}`}>{pct(impactoSaldo, 2)}</span>
                   </div>
                   <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-200">
-                    <div className={`h-full ${impactoSaldo > 100 ? 'bg-rose-500' : 'bg-indigo-400'}`} style={{ width: `${Math.min(100, impactoSaldo)}%` }} />
+                    <div className={`h-full ${impactoSaldo > 100 ? 'bg-rose-500' : 'bg-cremesp-400'}`} style={{ width: `${Math.min(100, impactoSaldo)}%` }} />
                   </div>
                 </div>
                 <div className="flex justify-between border-t border-slate-200 pt-2 text-xs text-slate-500">
@@ -2101,12 +2018,10 @@ function OrdemAba({
       <div className="overflow-x-auto pb-6 print:overflow-visible print:pb-0">
         <article id="folha-ordem" className="folha-a4 mx-auto bg-white text-[12px] leading-relaxed text-slate-900 shadow-lg ring-1 ring-slate-200">
           <header className="flex items-start justify-between gap-6 border-b-2 border-slate-900 pb-4">
-            <div className="flex items-start gap-3">
-              <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
-                <Building2 className="h-6 w-6" />
-              </div>
-              <div>
-                <p className="text-[13px] font-bold uppercase leading-tight">{ata.contratante}</p>
+            <div>
+              <img src={logoCremesp} alt={ata.contratante} className="h-12 w-auto" />
+              <div className="mt-2">
+                <p className="text-[11px] font-semibold text-slate-700">{ata.contratante}</p>
                 <p className="text-[11px] text-slate-600">CNPJ {ata.cnpjContratante}{ata.uasg ? ` · UASG ${ata.uasg}` : ''}</p>
                 <p className="text-[11px] text-slate-600">{ata.enderecoContratante}</p>
               </div>
@@ -2273,7 +2188,7 @@ function ConfigAba({
   const [filtroModulo, setFiltroModulo] = useState('todos');
   const [busca, setBusca] = useState('');
   const [novoModulo, setNovoModulo] = useState('');
-  const [corNovo, setCorNovo] = useState<CorModulo>('indigo');
+  const [corNovo, setCorNovo] = useState<CorModulo>('blue');
   const [editandoModulo, setEditandoModulo] = useState<string | null>(null);
   const arquivoRef = useRef<HTMLInputElement>(null);
 
@@ -2357,12 +2272,12 @@ function ConfigAba({
 
   const restaurarExemplo = () =>
     abrirDialogo({
-      titulo: 'Restaurar dados da ARP nº 0099/2025?',
+      titulo: 'Restaurar a Ata original?',
       variante: 'perigo',
-      confirmar: 'Restaurar dados de exemplo',
+      confirmar: 'Restaurar Ata original',
       mensagem: (
         <p>
-          Todos os dados atuais (Ata, módulos, itens e eventos) serão substituídos pelos 77 itens da ARP nº 0099/2025 (REDXCORP), com os preços do 1º Termo Aditivo (2026–2027), e pelos eventos de exemplo. Exporte
+          Todos os dados atuais (Ata, módulos, itens e eventos) serão substituídos pelos 77 itens da ARP nº 0099/2025 (REDXCORP), com os preços do 1º Termo Aditivo (2026–2027), sem nenhum evento. Exporte
           um backup antes se quiser guardar o que está aqui.
         </p>
       ),
@@ -2370,7 +2285,7 @@ function ConfigAba({
         const b = criarBaseExemplo();
         setBase(b);
         aoRestaurar(b);
-        avisar('Dados de exemplo restaurados.');
+        avisar('Ata original restaurada.');
       },
     });
 
@@ -2456,7 +2371,7 @@ function ConfigAba({
             }}
           />
           <Botao icone={<RotateCcw className="h-4 w-4" />} onClick={restaurarExemplo}>
-            Restaurar dados de exemplo
+            Restaurar Ata original
           </Botao>
           <Botao variante="perigo" icone={<Trash2 className="h-4 w-4" />} onClick={comecarDoZero}>
             Ata em branco
@@ -2677,7 +2592,7 @@ function ConfigAba({
               {itensFiltrados.length === 0 && (
                 <tr>
                   <td colSpan={8} className="px-5 py-10 text-center text-sm text-slate-500">
-                    {itens.length === 0 ? 'Nenhum item cadastrado. Use “Adicionar item” ou restaure os dados de exemplo.' : 'Nenhum item encontrado com esse filtro.'}
+                    {itens.length === 0 ? 'Nenhum item cadastrado. Use “Adicionar item” ou restaure a Ata original.' : 'Nenhum item encontrado com esse filtro.'}
                   </td>
                 </tr>
               )}
