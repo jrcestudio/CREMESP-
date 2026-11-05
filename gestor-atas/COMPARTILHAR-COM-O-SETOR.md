@@ -68,6 +68,17 @@ Faça isto uma vez, depois que o sistema já estiver no ar:
 O que o fornecedor pode fazer: ver os eventos que vocês enviaram (rascunhos ficam ocultos), conferir itens e valores,
 **confirmar o orçamento**, **pedir ajuste** e **mandar mensagens**. Ele não consegue alterar itens, quantidades nem etapas.
 
+## Ativar os anexos (arquivos e nota fiscal)
+
+Faça isto uma vez, depois do Portal do Fornecedor:
+
+1. No Supabase, abra **SQL Editor › New query**.
+2. Cole todo o conteúdo do arquivo `gestor-atas/supabase/anexos.sql` e clique em **Run**. Deve aparecer "Success".
+
+Isso cria uma pasta privada de arquivos (até 20 MB por arquivo). A equipe pode anexar arquivos em cada etapa, na aba
+**Eventos e andamento**. O fornecedor anexa arquivos às respostas e envia a **nota fiscal** pelo portal. A nota aparece
+para a equipe no quadro **Anexos do evento**. O fornecedor só vê os arquivos dos eventos enviados a ele e não consegue apagar nada.
+
 ## Dúvidas comuns
 
 - **“Acesso não liberado”:** o e-mail ainda não está na equipe. Alguém que já usa o sistema precisa adicioná-lo.

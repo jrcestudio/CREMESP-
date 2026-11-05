@@ -28,6 +28,7 @@ import {
   Loader2,
   MapPin,
   Package,
+  Paperclip,
   Pencil,
   Plus,
   Printer,
@@ -87,6 +88,9 @@ interface AtaInfo {
   vigenciaFim: string;
   gestor: string;
   fiscal: string;
+  /** Quem autoriza a ordem pelo Cremesp (assinatura) */
+  coordenador: string;
+  cargoCoordenador: string;
   contratante: string;
   cnpjContratante: string;
   enderecoContratante: string;
@@ -144,9 +148,18 @@ interface Andamento {
   por: string;
   lado: 'equipe' | 'fornecedor';
   etapa: Etapa;
-  /** 'etapa' (mudança de etapa), 'mensagem', 'confirmar' ou 'ajuste' (respostas do fornecedor) */
+  /** 'etapa' (mudança de etapa), 'mensagem', 'confirmar', 'ajuste' ou 'nota_fiscal' (respostas do fornecedor) */
   acao?: string;
   mensagem?: string;
+  anexos?: Anexo[];
+}
+
+/** Arquivo guardado no Supabase Storage (bucket "anexos") */
+interface Anexo {
+  nome: string;
+  caminho: string;
+  tamanho: number;
+  tipo: string;
 }
 
 type ComQuem = 'equipe' | 'fornecedor' | 'concluido';
@@ -190,6 +203,23 @@ function etapaDe(ev: Evento): Etapa {
   return ev.status === 'aprovado' ? 'aprovado' : 'rascunho';
 }
 
+/** Separação em abas: solicitados (em curso), realizados e cancelados */
+type GrupoEvento = 'solicitado' | 'realizado' | 'cancelado';
+function grupoEvento(ev: Evento, hoje = new Date().toISOString().slice(0, 10)): GrupoEvento {
+  const etapa = etapaDe(ev);
+  if (etapa === 'cancelado') return 'cancelado';
+  if (indiceEtapa(etapa) >= indiceEtapa('realizado')) return 'realizado';
+  if (etapaAprovada(etapa) && (ev.dataFim || ev.dataInicio) && (ev.dataFim || ev.dataInicio) < hoje) return 'realizado';
+  return 'solicitado';
+}
+
+/** Todos os anexos do evento, do mais novo para o mais antigo, com a etapa em que entraram */
+function anexosDoEvento(ev: Evento): { a: Anexo; h: Andamento }[] {
+  const out: { a: Anexo; h: Andamento }[] = [];
+  for (const h of ev.historico ?? []) for (const a of h.anexos ?? []) out.push({ a, h });
+  return out.reverse();
+}
+
 /** Próximo passo sugerido a partir de cada etapa */
 const PROXIMA_ETAPA: Partial<Record<Etapa, Etapa>> = {
   rascunho: 'revisao_fornecedor',
@@ -206,9 +236,10 @@ const PROXIMA_ETAPA: Partial<Record<Etapa, Etapa>> = {
 };
 
 /** Muda a etapa, registra no histórico e mantém o status (saldo) coerente */
-function patchEtapa(e: Evento, etapa: Etapa, por: string, mensagem = '', acao = 'etapa'): Partial<Evento> {
+function patchEtapa(e: Evento, etapa: Etapa, por: string, mensagem = '', acao = 'etapa', anexos: Anexo[] = []): Partial<Evento> {
   const entrada: Andamento = { id: uid('and'), em: new Date().toISOString(), por, lado: 'equipe', etapa, acao };
   if (mensagem.trim()) entrada.mensagem = mensagem.trim();
+  if (anexos.length) entrada.anexos = anexos;
   const aprovado = etapaAprovada(etapa);
   return {
     etapa,
@@ -265,6 +296,8 @@ const ATA_EXEMPLO: AtaInfo = {
   vigenciaFim: '2027-11-13',
   gestor: 'Carolina Gomes Marcelino',
   fiscal: 'Tatiana dos Santos',
+  coordenador: 'Alexandre Kataoka',
+  cargoCoordenador: 'Coordenador do Departamento de Comunicação',
   contratante: 'CONSELHO REGIONAL DE MEDICINA DO ESTADO DE SÃO PAULO – CREMESP',
   cnpjContratante: '63.106.843/0001-97',
   enderecoContratante: 'Rua Luís Coelho, 26, Consolação, São Paulo/SP, CEP 01309-900',
@@ -553,6 +586,7 @@ async function copiarTexto(texto: string): Promise<boolean> {
 // ---------------------------------------------------------------- Persistência
 
 const CHAVE_STORAGE = 'gestor-atas-cremesp:v3';
+const LIMITE_ANEXO = 20 * 1024 * 1024;
 
 // Garante que backups antigos tenham todos os campos atuais da Ata
 function normalizarBase(b: Base): Base {
@@ -784,7 +818,75 @@ function fmtDataHora(iso: string): string {
   return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
 
-function LinhaDoTempo({ historico, fornecedor = false }: { historico: Andamento[]; fornecedor?: boolean }) {
+function tamanhoArquivo(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1).replace('.', ',')} MB`;
+}
+
+function ListaAnexos({ anexos, abrir }: { anexos: Anexo[]; abrir?: (a: Anexo) => void }) {
+  if (anexos.length === 0) return null;
+  return (
+    <ul className="mt-1.5 flex flex-wrap gap-2">
+      {anexos.map((a) => (
+        <li key={a.caminho}>
+          <button
+            type="button"
+            onClick={() => abrir?.(a)}
+            disabled={!abrir}
+            className="inline-flex max-w-[280px] items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-cremesp-300 hover:bg-cremesp-50 disabled:cursor-default disabled:hover:bg-white"
+            title={abrir ? `Abrir ${a.nome}` : a.nome}
+          >
+            <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+            <span className="truncate">{a.nome}</span>
+            <span className="shrink-0 text-slate-400">{tamanhoArquivo(a.tamanho)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Escolha de arquivos para anexar (envio acontece ao registrar) */
+function SeletorAnexos({ arquivos, setArquivos, disabled, rotulo = 'Anexar arquivos' }: { arquivos: File[]; setArquivos: (f: File[]) => void; disabled?: boolean; rotulo?: string }) {
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <div>
+      <input
+        ref={ref}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const novos = Array.from(e.target.files ?? []);
+          setArquivos([...arquivos, ...novos].slice(0, 10));
+          e.target.value = '';
+        }}
+      />
+      <Botao tamanho="sm" icone={<Paperclip className="h-3.5 w-3.5" />} onClick={() => ref.current?.click()} disabled={disabled}>
+        {rotulo}
+      </Botao>
+      {arquivos.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {arquivos.map((f, i) => (
+            <li key={`${f.name}-${i}`} className="flex items-center justify-between gap-2 rounded-md bg-slate-50 px-2.5 py-1 text-xs text-slate-700">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Paperclip className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                <span className="truncate">{f.name}</span>
+                <span className={`shrink-0 ${f.size > LIMITE_ANEXO ? 'font-semibold text-rose-600' : 'text-slate-400'}`}>{tamanhoArquivo(f.size)}</span>
+              </span>
+              <button type="button" className="rounded p-0.5 text-slate-400 hover:text-rose-600" onClick={() => setArquivos(arquivos.filter((_, k) => k !== i))} aria-label={`Remover ${f.name}`}>
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function LinhaDoTempo({ historico, fornecedor = false, abrir }: { historico: Andamento[]; fornecedor?: boolean; abrir?: (a: Anexo) => void }) {
   if (historico.length === 0) return <p className="text-sm text-slate-500">Nenhum andamento registrado ainda.</p>;
   return (
     <ol className="relative space-y-4 border-l border-slate-200 pl-5">
@@ -799,9 +901,11 @@ function LinhaDoTempo({ historico, fornecedor = false }: { historico: Andamento[
               ? 'Fornecedor confirmou o orçamento'
               : h.acao === 'ajuste'
                 ? 'Fornecedor pediu ajuste'
-                : fornecedor
-                  ? infoEtapa(h.etapa).rotuloFornecedor
-                  : infoEtapa(h.etapa).rotulo;
+                : h.acao === 'nota_fiscal'
+                  ? 'Fornecedor enviou a nota fiscal'
+                  : fornecedor
+                    ? infoEtapa(h.etapa).rotuloFornecedor
+                    : infoEtapa(h.etapa).rotulo;
         return (
           <li key={h.id} className="relative">
             <span className={`absolute -left-[26px] top-1 h-3 w-3 rounded-full ring-4 ring-white ${doFornecedor ? 'bg-amber-500' : 'bg-cremesp-600'}`} />
@@ -811,6 +915,7 @@ function LinhaDoTempo({ historico, fornecedor = false }: { historico: Andamento[
               {h.por && !fornecedor ? ` (${h.por})` : ''}
             </p>
             {h.mensagem && <p className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{h.mensagem}</p>}
+            <ListaAnexos anexos={h.anexos ?? []} abrir={abrir} />
           </li>
         );
       })}
@@ -864,6 +969,7 @@ function AppGestor({
   painelConta,
   painelEquipe,
   usuario = 'Equipe',
+  cliente = null,
 }: {
   base: Base;
   setBase: Dispatch<SetStateAction<Base>>;
@@ -871,6 +977,7 @@ function AppGestor({
   painelConta?: ReactNode;
   painelEquipe?: ReactNode;
   usuario?: string;
+  cliente?: SupabaseClient | null;
 }) {
   const [aba, setAba] = useState<Aba>('dashboard');
   const [eventoSelId, setEventoSelId] = useState<string>(() => {
@@ -986,7 +1093,7 @@ function AppGestor({
     { id: 'dashboard', rotulo: 'Dashboard & Saldos', curto: 'Saldos', icone: <LayoutDashboard className="h-4 w-4" /> },
     { id: 'simulador', rotulo: 'Simulador de Evento', curto: 'Simulador', icone: <Layers className="h-4 w-4" /> },
     { id: 'ordem', rotulo: 'Ordem de Orçamento', curto: 'Ordem', icone: <FileText className="h-4 w-4" /> },
-    { id: 'andamento', rotulo: 'Andamento', curto: 'Andamento', icone: <ListChecks className="h-4 w-4" /> },
+    { id: 'andamento', rotulo: 'Eventos e andamento', curto: 'Eventos', icone: <ListChecks className="h-4 w-4" /> },
     { id: 'relatorios', rotulo: 'Relatórios', curto: 'Relatórios', icone: <BarChart3 className="h-4 w-4" /> },
     { id: 'config', rotulo: 'Configuração da Ata', curto: 'Config.', icone: <Settings className="h-4 w-4" /> },
   ];
@@ -1126,6 +1233,7 @@ function AppGestor({
               avisar={avisar}
               abrirDialogo={setDialogo}
               irParaEvento={irParaEvento}
+              cliente={cliente}
             />
           )}
           {aba === 'ordem' && (
@@ -2141,10 +2249,7 @@ function OrdemAba({
     }
     linhasTxt.push('');
     linhasTxt.push(`*VALOR TOTAL: ${brl(total)}*`);
-    if (evento.observacoes.trim()) {
-      linhasTxt.push('');
-      linhasTxt.push(`*Observações:* ${evento.observacoes.trim()}`);
-    }
+    linhasTxt.push(`_(${valorPorExtenso(total)})_`);
     linhasTxt.push('');
     linhasTxt.push(ehOS ? 'Favor confirmar o recebimento desta Ordem de Serviço.' : 'Favor confirmar disponibilidade e retornar o orçamento conforme valores registrados na Ata.');
     return linhasTxt.join('\n');
@@ -2206,14 +2311,6 @@ function OrdemAba({
                 : 'Sem protocolo, o documento sai com um espaço em branco para preencher à mão.'}
             </p>
           </div>
-          <Campo rotulo="Observações técnicas / logísticas (aparecem no documento)">
-            <textarea
-              className={`${inputCls} min-h-[72px]`}
-              value={evento.observacoes}
-              placeholder="Ex.: horário de montagem, passagem de som, contato no local, acesso para carga e descarga…"
-              onChange={(e) => atualizar(evento.id, { observacoes: e.target.value })}
-            />
-          </Campo>
         </Card>
       </div>
 
@@ -2331,14 +2428,16 @@ function OrdemAba({
                 </td>
                 <td className="whitespace-nowrap border border-slate-900 px-2 py-2 text-right text-[13px] font-bold tabular-nums">{brl(total)}</td>
               </tr>
+              <tr>
+                <td colSpan={7} className="border border-slate-300 px-2 py-1.5 text-right text-[11px]">
+                  <span className="font-semibold">Valor por extenso:</span> <span className="italic">{valorPorExtenso(total)}</span>
+                </td>
+              </tr>
             </tfoot>
           </table>
-          <p className="mt-1.5 text-[11px] italic text-slate-600">({valorPorExtenso(total)})</p>
 
-          <section className="evitar-quebra mt-5 rounded border border-slate-300 p-3">
-            <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-500">Observações técnicas / logísticas</p>
-            <p className="whitespace-pre-wrap">{evento.observacoes.trim() || '—'}</p>
-            <p className="mt-2 text-[10.5px] text-slate-600">
+          <section className="evitar-quebra mt-4">
+            <p className="text-[10.5px] text-slate-600">
               Valores unitários conforme registrados na {ata.numero}. As quantidades acima consideram quantidade × diárias, abatidas do saldo registrado da Ata.
               {!ehOS && ' Este documento é uma solicitação de orçamento e não autoriza a execução dos serviços.'}
             </p>
@@ -2354,8 +2453,9 @@ function OrdemAba({
                 ['Gestor(a) da Ata', ata.gestor || 'Contratante'],
                 ['Fiscal da Ata', ata.fiscal || 'Contratante'],
                 [ehOS ? 'Ciente – Fornecedor' : 'De acordo – Fornecedor', ata.fornecedor],
-              ].map(([cargo, nome]) => (
-                <div key={cargo}>
+                [ata.cargoCoordenador || 'Coordenador do Departamento de Comunicação', ata.coordenador || 'Alexandre Kataoka'],
+              ].map(([cargo, nome], i) => (
+                <div key={cargo} className={i === 4 ? 'col-span-2 mx-auto w-1/2' : ''}>
                   <div className="border-t border-slate-800 pt-1.5">
                     <p className="font-semibold">{nome}</p>
                     <p className="text-slate-600">{cargo}</p>
@@ -2827,7 +2927,7 @@ function excessosAoAprovar(ev: Evento, usoTotal: Map<string, Uso>, usoPorEvento:
   return n;
 }
 
-type FiltroAndamento = 'todos' | 'equipe' | 'fornecedor' | 'concluido';
+type FiltroAndamento = 'todos' | 'equipe' | 'fornecedor';
 
 function AndamentoAba({
   ata,
@@ -2843,6 +2943,7 @@ function AndamentoAba({
   avisar,
   abrirDialogo,
   irParaEvento,
+  cliente,
 }: {
   ata: AtaInfo;
   eventos: Evento[];
@@ -2857,8 +2958,13 @@ function AndamentoAba({
   avisar: (t: string, tipo?: 'ok' | 'erro') => void;
   abrirDialogo: (d: DialogoConfig) => void;
   irParaEvento: (id: string, destino: Aba) => void;
+  cliente?: SupabaseClient | null;
 }) {
   const [filtro, setFiltro] = useState<FiltroAndamento>('todos');
+  const [grupo, setGrupo] = useState<GrupoEvento>(() => (evento ? grupoEvento(evento) : 'solicitado'));
+  const [arquivos, setArquivos] = useState<File[]>([]);
+  const [enviando, setEnviando] = useState(false);
+  const abrir = cliente ? (a: Anexo) => void abrirAnexoNoNavegador(cliente, a) : undefined;
   const etapaAtual = evento ? etapaDe(evento) : 'rascunho';
   const [alvo, setAlvo] = useState<Etapa>(PROXIMA_ETAPA[etapaAtual] ?? etapaAtual);
   const [mensagem, setMensagem] = useState('');
@@ -2867,6 +2973,7 @@ function AndamentoAba({
   useEffect(() => {
     setAlvo(PROXIMA_ETAPA[etapaAtual] ?? etapaAtual);
     setMensagem('');
+    setArquivos([]);
     setProtocolo(evento?.protocolo ?? '');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evento?.id, etapaAtual]);
@@ -2876,18 +2983,29 @@ function AndamentoAba({
     return h.length ? h[h.length - 1].em : ev.atualizadoEm;
   };
 
-  const contagem = useMemo(() => {
-    const c = { todos: eventos.length, equipe: 0, fornecedor: 0, concluido: 0 };
-    for (const ev of eventos) c[infoEtapa(etapaDe(ev)).com] += 1;
+  const porGrupo = useMemo(() => {
+    const c: Record<GrupoEvento, number> = { solicitado: 0, realizado: 0, cancelado: 0 };
+    for (const ev of eventos) c[grupoEvento(ev)] += 1;
     return c;
   }, [eventos]);
 
+  const doGrupo = useMemo(() => eventos.filter((ev) => grupoEvento(ev) === grupo), [eventos, grupo]);
+
+  const contagem = useMemo(() => {
+    const c: Record<FiltroAndamento, number> = { todos: doGrupo.length, equipe: 0, fornecedor: 0 };
+    for (const ev of doGrupo) {
+      const com = infoEtapa(etapaDe(ev)).com;
+      if (com === 'equipe' || com === 'fornecedor') c[com] += 1;
+    }
+    return c;
+  }, [doGrupo]);
+
   const lista = useMemo(
     () =>
-      eventos
+      doGrupo
         .filter((ev) => filtro === 'todos' || infoEtapa(etapaDe(ev)).com === filtro)
         .sort((a, b) => (ultimaAtualizacao(b) ?? '').localeCompare(ultimaAtualizacao(a) ?? '')),
-    [eventos, filtro],
+    [doGrupo, filtro],
   );
 
   const copiarConvite = async () => {
@@ -2906,14 +3024,18 @@ function AndamentoAba({
     { id: 'todos', rotulo: 'Todos' },
     { id: 'equipe', rotulo: 'Com a gente' },
     { id: 'fornecedor', rotulo: 'Com o fornecedor' },
-    { id: 'concluido', rotulo: 'Concluídos' },
+  ];
+  const GRUPOS: { id: GrupoEvento; rotulo: string }[] = [
+    { id: 'solicitado', rotulo: 'Eventos solicitados' },
+    { id: 'realizado', rotulo: 'Eventos realizados' },
+    { id: 'cancelado', rotulo: 'Cancelados' },
   ];
 
   const cabecalho = (
     <div className="flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold tracking-tight">Andamento</h1>
-        <p className="mt-1 text-sm text-slate-500">Cada etapa do evento, do orçamento com o fornecedor até o pagamento da nota.</p>
+        <h1 className="text-xl font-semibold tracking-tight">Eventos e andamento</h1>
+        <p className="mt-1 text-sm text-slate-500">Eventos solicitados e realizados, com cada etapa, do orçamento com o fornecedor até o pagamento da nota.</p>
       </div>
       {compartilhado && (
         <Botao icone={<ClipboardCopy className="h-4 w-4" />} onClick={() => void copiarConvite()}>
@@ -2932,21 +3054,40 @@ function AndamentoAba({
     );
   }
 
-  const registrar = (soMensagem: boolean) => {
+  /** Envia os arquivos escolhidos; devolve null se deu erro */
+  const subirArquivos = async (): Promise<Anexo[] | null> => {
+    if (!evento || arquivos.length === 0) return [];
+    if (!cliente) {
+      avisar('Anexos só funcionam no sistema compartilhado (com login).', 'erro');
+      return null;
+    }
+    setEnviando(true);
+    try {
+      return await enviarAnexos(cliente, evento.id, arquivos);
+    } catch (err) {
+      avisar(err instanceof Error ? err.message : String(err), 'erro');
+      return null;
+    } finally {
+      setEnviando(false);
+    }
+  };
+
+  const registrar = async (soMensagem: boolean) => {
     if (!evento) return;
     if (soMensagem) {
-      if (!mensagem.trim()) {
-        avisar('Escreva a mensagem antes de enviar.', 'erro');
+      if (!mensagem.trim() && arquivos.length === 0) {
+        avisar('Escreva a mensagem ou anexe um arquivo antes de enviar.', 'erro');
         return;
       }
-      atualizar(evento.id, (e) => ({
-        historico: [
-          ...(e.historico ?? []),
-          { id: uid('and'), em: new Date().toISOString(), por: usuario, lado: 'equipe', etapa: etapaDe(e), acao: 'mensagem', mensagem: mensagem.trim() },
-        ],
-      }));
+      const anexos = await subirArquivos();
+      if (!anexos) return;
+      const entrada: Andamento = { id: uid('and'), em: new Date().toISOString(), por: usuario, lado: 'equipe', etapa: etapaAtual, acao: 'mensagem' };
+      if (mensagem.trim()) entrada.mensagem = mensagem.trim();
+      if (anexos.length) entrada.anexos = anexos;
+      atualizar(evento.id, (e) => ({ historico: [...(e.historico ?? []), { ...entrada, etapa: etapaDe(e) }] }));
       setMensagem('');
-      avisar('Mensagem registrada. O fornecedor vê no portal.');
+      setArquivos([]);
+      avisar('Registrado. O fornecedor vê no portal.');
       return;
     }
     if (alvo === etapaAtual) {
@@ -2965,13 +3106,16 @@ function AndamentoAba({
         return;
       }
     }
-    const aplicar = () => {
+    const aplicar = async () => {
+      const anexos = await subirArquivos();
+      if (!anexos) return;
       const prot = protocolo.trim();
       atualizar(evento.id, (e) => ({
-        ...patchEtapa(e, alvo, usuario, mensagem),
+        ...patchEtapa(e, alvo, usuario, mensagem, 'etapa', anexos),
         ...(alvo === 'protocolado' && prot ? { protocolo: prot } : {}),
       }));
       setMensagem('');
+      setArquivos([]);
       avisar(`Etapa atualizada: ${infoEtapa(alvo).rotulo}.`);
     };
     const passaAprovar = etapaAprovada(alvo) && evento.status !== 'aprovado';
@@ -2990,11 +3134,11 @@ function AndamentoAba({
                 : 'O valor volta a ficar disponível no saldo da Ata até uma nova aprovação.'}
           </p>
         ),
-        aoConfirmar: aplicar,
+        aoConfirmar: () => void aplicar(),
       });
       return;
     }
-    aplicar();
+    await aplicar();
   };
 
   const caminho = ETAPAS.filter((e) => e.id !== 'ajuste_solicitado' && e.id !== 'cancelado');
@@ -3003,6 +3147,25 @@ function AndamentoAba({
   return (
     <div className="space-y-6">
       {cabecalho}
+
+      <div className="inline-flex flex-wrap rounded-xl bg-slate-100 p-1">
+        {GRUPOS.filter((g) => g.id !== 'cancelado' || porGrupo.cancelado > 0).map((g) => (
+          <button
+            key={g.id}
+            onClick={() => {
+              setGrupo(g.id);
+              setFiltro('todos');
+              const primeiro = eventos
+                .filter((ev) => grupoEvento(ev) === g.id)
+                .sort((a, b) => (ultimaAtualizacao(b) ?? '').localeCompare(ultimaAtualizacao(a) ?? ''))[0];
+              if (primeiro) selecionar(primeiro.id);
+            }}
+            className={`rounded-lg px-4 py-2 text-sm font-medium ${grupo === g.id ? 'bg-white text-cremesp-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+          >
+            {g.rotulo} <span className="ml-1 opacity-60">{porGrupo[g.id]}</span>
+          </button>
+        ))}
+      </div>
 
       <div className="flex flex-wrap gap-2">
         {FILTROS.map((f) => (
@@ -3039,7 +3202,7 @@ function AndamentoAba({
                 </button>
               </li>
             ))}
-            {lista.length === 0 && <li className="px-4 py-6 text-sm text-slate-500">Nenhum evento neste filtro.</li>}
+            {lista.length === 0 && <li className="px-4 py-6 text-sm text-slate-500">Nenhum evento nesta aba.</li>}
           </ul>
         </Card>
 
@@ -3117,21 +3280,57 @@ function AndamentoAba({
                     onChange={(e) => setMensagem(e.target.value)}
                   />
                 </Campo>
+                <div className="md:col-span-2">
+                  {cliente ? (
+                    <SeletorAnexos arquivos={arquivos} setArquivos={setArquivos} disabled={enviando} rotulo="Anexar arquivos (orçamento, ordem, comprovantes…)" />
+                  ) : (
+                    <p className="text-xs text-slate-500">Anexos ficam disponíveis no sistema compartilhado, com login.</p>
+                  )}
+                </div>
                 <div className="flex flex-wrap gap-2 md:col-span-2">
-                  <Botao variante="primario" icone={<Check className="h-4 w-4" />} onClick={() => registrar(false)} disabled={alvo === etapaAtual}>
+                  <Botao variante="primario" icone={enviando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} onClick={() => void registrar(false)} disabled={alvo === etapaAtual || enviando}>
                     {alvo === etapaAtual ? 'Escolha a nova etapa' : infoEtapa(alvo).acao}
                   </Botao>
-                  <Botao onClick={() => registrar(true)} disabled={!mensagem.trim()}>
-                    Só registrar mensagem
+                  <Botao onClick={() => void registrar(true)} disabled={(!mensagem.trim() && arquivos.length === 0) || enviando}>
+                    Só registrar mensagem/anexo
                   </Botao>
                 </div>
               </div>
             </Card>
 
+            {(() => {
+              const todos = anexosDoEvento(evento);
+              if (todos.length === 0) return null;
+              const notas = todos.filter((x) => x.h.acao === 'nota_fiscal');
+              return (
+                <Card>
+                  <CardHeader titulo="Anexos do evento" subtitulo="Arquivos enviados pela equipe e pelo fornecedor. Clique para abrir." icone={<Paperclip className="h-4 w-4" />} />
+                  <div className="space-y-4 p-5">
+                    {notas.length > 0 && (
+                      <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
+                        <p className="text-sm font-semibold text-blue-900">Nota fiscal enviada pelo fornecedor</p>
+                        <ListaAnexos anexos={notas.map((x) => x.a)} abrir={abrir} />
+                      </div>
+                    )}
+                    <ul className="divide-y divide-slate-100">
+                      {todos.map(({ a, h }) => (
+                        <li key={a.caminho} className="flex flex-wrap items-center justify-between gap-2 py-2">
+                          <ListaAnexos anexos={[a]} abrir={abrir} />
+                          <span className="text-xs text-slate-500">
+                            {h.lado === 'fornecedor' ? 'Fornecedor' : 'Cremesp'} · {infoEtapa(h.etapa).rotulo} · {fmtDataHora(h.em)}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </Card>
+              );
+            })()}
+
             <Card>
               <CardHeader titulo="Histórico" subtitulo="Do mais recente para o mais antigo" icone={<FileText className="h-4 w-4" />} />
               <div className="p-5">
-                <LinhaDoTempo historico={evento.historico ?? []} />
+                <LinhaDoTempo historico={evento.historico ?? []} abrir={abrir} />
               </div>
             </Card>
           </div>
@@ -3391,6 +3590,8 @@ function ConfigAba({
               {campoAta('Cidade (assinatura)', 'cidade')}
               {campoAta('Gestor(a) da Ata', 'gestor', 'lg:col-span-2')}
               {campoAta('Fiscal da Ata', 'fiscal', 'lg:col-span-2')}
+              {campoAta('Coordenador(a) que assina a ordem', 'coordenador', 'lg:col-span-2')}
+              {campoAta('Cargo do(a) coordenador(a)', 'cargoCoordenador', 'lg:col-span-2')}
             </div>
           </div>
         </Card>
@@ -3627,6 +3828,49 @@ const SUPABASE_KEY = (import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefin
 const supabase: SupabaseClient | null = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
 
 const chaveRegistro = (c: string, id: string) => `${c}:${id}`;
+
+// ----- Anexos (Supabase Storage)
+const BUCKET_ANEXOS = 'anexos';
+
+function nomeSeguro(nome: string): string {
+  const limpo = nome
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w.-]+/g, '-')
+    .replace(/-+/g, '-');
+  return limpo.slice(-80) || 'arquivo';
+}
+
+async function enviarAnexos(cliente: SupabaseClient, eventoId: string, arquivos: File[]): Promise<Anexo[]> {
+  const enviados: Anexo[] = [];
+  for (const f of arquivos) {
+    if (f.size > LIMITE_ANEXO) throw new Error(`"${f.name}" passa de 20 MB.`);
+    const caminho = `eventos/${eventoId}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${nomeSeguro(f.name)}`;
+    const { error } = await cliente.storage.from(BUCKET_ANEXOS).upload(caminho, f, { contentType: f.type || 'application/octet-stream', upsert: false });
+    if (error) {
+      throw new Error(
+        /bucket not found/i.test(error.message)
+          ? 'O armazenamento de anexos ainda não foi ativado. Rode o script supabase/anexos.sql no Supabase.'
+          : `Não foi possível enviar "${f.name}": ${error.message}`,
+      );
+    }
+    enviados.push({ nome: f.name, caminho, tamanho: f.size, tipo: f.type });
+  }
+  return enviados;
+}
+
+async function abrirAnexoNoNavegador(cliente: SupabaseClient, a: Anexo): Promise<void> {
+  // Abre a aba antes do await para o navegador não bloquear o pop-up
+  const janela = window.open('', '_blank');
+  const { data, error } = await cliente.storage.from(BUCKET_ANEXOS).createSignedUrl(a.caminho, 600);
+  if (error || !data) {
+    janela?.close();
+    window.alert(`Não foi possível abrir o anexo. ${error?.message ?? ''}`);
+    return;
+  }
+  if (janela) janela.location.href = data.signedUrl;
+  else window.location.href = data.signedUrl;
+}
 
 function baseParaRegistros(b: Base): Map<string, Registro> {
   const m = new Map<string, Registro>();
@@ -4015,14 +4259,21 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
 
 // ---------------------------------------------------------------- Portal do fornecedor
 
-type AcaoFornecedor = 'confirmar' | 'ajuste' | 'mensagem';
+type AcaoFornecedor = 'confirmar' | 'ajuste' | 'mensagem' | 'nota_fiscal';
+const ETAPAS_NOTA_FISCAL: Etapa[] = ['aprovado', 'protocolado', 'os_enviada', 'realizado', 'nota_recebida'];
 
 function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient; email: string; inicial: Base }) {
   const [base, setBase] = useState<Base>(inicial);
   const [selId, setSelId] = useState<string>('');
   const [texto, setTexto] = useState('');
   const [textoMsg, setTextoMsg] = useState('');
+  const [textoNota, setTextoNota] = useState('');
+  const [arqRevisao, setArqRevisao] = useState<File[]>([]);
+  const [arqMsg, setArqMsg] = useState<File[]>([]);
+  const [arqNota, setArqNota] = useState<File[]>([]);
+  const [abaPortal, setAbaPortal] = useState<'solicitado' | 'realizado'>('solicitado');
   const [enviando, setEnviando] = useState(false);
+  const abrir = (a: Anexo) => void abrirAnexoNoNavegador(cliente, a);
   const [aviso, setAviso] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
 
   // Recebe em tempo real o que a equipe do Cremesp altera
@@ -4052,24 +4303,44 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
 
   const grupos = useMemo(() => {
     const porData = (a: Evento, b: Evento) => a.dataInicio.localeCompare(b.dataInicio);
-    const precisa: Evento[] = [];
-    const andamento: Evento[] = [];
-    const passados: Evento[] = [];
+    const precisaSol: Evento[] = [];
+    const solicitados: Evento[] = [];
+    const precisaReal: Evento[] = [];
+    const realizados: Evento[] = [];
+    const cancelados: Evento[] = [];
     for (const ev of eventos) {
-      const info = infoEtapa(etapaDe(ev));
-      if (info.com === 'fornecedor') precisa.push(ev);
-      else if (info.com === 'concluido' || (ev.dataFim || ev.dataInicio) < hoje) passados.push(ev);
-      else andamento.push(ev);
+      const g = grupoEvento(ev, hoje);
+      const precisa = infoEtapa(etapaDe(ev)).com === 'fornecedor';
+      if (g === 'cancelado') cancelados.push(ev);
+      else if (g === 'realizado') (precisa ? precisaReal : realizados).push(ev);
+      else (precisa ? precisaSol : solicitados).push(ev);
     }
-    return { precisa: precisa.sort(porData), andamento: andamento.sort(porData), passados: passados.sort(porData).reverse() };
+    return {
+      precisaSol: precisaSol.sort(porData),
+      solicitados: solicitados.sort(porData),
+      precisaReal: precisaReal.sort(porData).reverse(),
+      realizados: realizados.sort(porData).reverse(),
+      cancelados: cancelados.sort(porData).reverse(),
+    };
   }, [eventos, hoje]);
+  const nSolicitados = grupos.precisaSol.length + grupos.solicitados.length;
+  const nRealizados = grupos.precisaReal.length + grupos.realizados.length + grupos.cancelados.length;
+  const nPrecisa = grupos.precisaSol.length + grupos.precisaReal.length;
+  const daAba =
+    abaPortal === 'solicitado'
+      ? [...grupos.precisaSol, ...grupos.solicitados]
+      : [...grupos.precisaReal, ...grupos.realizados, ...grupos.cancelados];
 
-  const evento = eventos.find((e) => e.id === selId) ?? grupos.precisa[0] ?? grupos.andamento[0] ?? grupos.passados[0] ?? null;
+  const evento = eventos.find((e) => e.id === selId) ?? daAba[0] ?? null;
   const etapa = evento ? etapaDe(evento) : 'rascunho';
 
   useEffect(() => {
     setTexto('');
     setTextoMsg('');
+    setTextoNota('');
+    setArqRevisao([]);
+    setArqMsg([]);
+    setArqNota([]);
     setAviso(null);
   }, [evento?.id]);
 
@@ -4084,25 +4355,59 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
 
   const agir = async (acao: AcaoFornecedor) => {
     if (!evento) return;
-    const conteudo = (acao === 'mensagem' ? textoMsg : texto).trim();
-    if ((acao === 'ajuste' || acao === 'mensagem') && !conteudo) {
-      setAviso({ tipo: 'erro', texto: acao === 'ajuste' ? 'Descreva o ajuste que precisa ser feito.' : 'Escreva a mensagem.' });
+    const conteudo = (acao === 'mensagem' ? textoMsg : acao === 'nota_fiscal' ? textoNota : texto).trim();
+    const arquivos = acao === 'mensagem' ? arqMsg : acao === 'nota_fiscal' ? arqNota : arqRevisao;
+    if (acao === 'ajuste' && !conteudo) {
+      setAviso({ tipo: 'erro', texto: 'Descreva o ajuste que precisa ser feito.' });
+      return;
+    }
+    if (acao === 'mensagem' && !conteudo && arquivos.length === 0) {
+      setAviso({ tipo: 'erro', texto: 'Escreva a mensagem ou anexe um arquivo.' });
+      return;
+    }
+    if (acao === 'nota_fiscal' && arquivos.length === 0) {
+      setAviso({ tipo: 'erro', texto: 'Anexe o arquivo da nota fiscal (PDF ou XML).' });
       return;
     }
     setEnviando(true);
     setAviso(null);
-    const { data, error } = await cliente.rpc('fornecedor_acao', { p_evento: evento.id, p_acao: acao, p_mensagem: conteudo });
+    let anexos: Anexo[] = [];
+    try {
+      anexos = await enviarAnexos(cliente, evento.id, arquivos);
+    } catch (err) {
+      setEnviando(false);
+      setAviso({ tipo: 'erro', texto: err instanceof Error ? err.message : String(err) });
+      return;
+    }
+    const params: Record<string, unknown> = { p_evento: evento.id, p_acao: acao, p_mensagem: conteudo };
+    if (anexos.length) params.p_anexos = anexos;
+    const { data, error } = await cliente.rpc('fornecedor_acao', params);
     setEnviando(false);
     if (error) {
       setAviso({ tipo: 'erro', texto: `Não foi possível enviar. ${error.message}` });
       return;
     }
     if (data) setBase((b) => ({ ...b, eventos: b.eventos.map((e) => (e.id === evento.id ? (data as Evento) : e)) }));
-    if (acao === 'mensagem') setTextoMsg('');
-    else setTexto('');
+    if (acao === 'mensagem') {
+      setTextoMsg('');
+      setArqMsg([]);
+    } else if (acao === 'nota_fiscal') {
+      setTextoNota('');
+      setArqNota([]);
+    } else {
+      setTexto('');
+      setArqRevisao([]);
+    }
     setAviso({
       tipo: 'ok',
-      texto: acao === 'confirmar' ? 'Orçamento confirmado. O Cremesp já foi avisado no painel.' : acao === 'ajuste' ? 'Pedido de ajuste enviado ao Cremesp.' : 'Mensagem enviada ao Cremesp.',
+      texto:
+        acao === 'confirmar'
+          ? 'Orçamento confirmado. O Cremesp já foi avisado no painel.'
+          : acao === 'ajuste'
+            ? 'Pedido de ajuste enviado ao Cremesp.'
+            : acao === 'nota_fiscal'
+              ? 'Nota fiscal enviada ao Cremesp.'
+              : 'Mensagem enviada ao Cremesp.',
     });
   };
 
@@ -4156,9 +4461,29 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
 
       <main className="mx-auto max-w-[1300px] space-y-5 px-4 py-6 sm:px-6 print:max-w-none print:p-0">
         <div data-print-hide className="grid gap-3 sm:grid-cols-3">
-          <Kpi titulo="Precisam de vocês" valor={String(grupos.precisa.length)} detalhe="orçamentos para revisar e ordens para executar" icone={<AlertTriangle className="h-4 w-4" />} destaque="bg-amber-50 text-amber-700" />
-          <Kpi titulo="Em andamento" valor={String(grupos.andamento.length)} detalhe="eventos em análise ou aprovados" icone={<CalendarDays className="h-4 w-4" />} />
-          <Kpi titulo="Passados" valor={String(grupos.passados.length)} detalhe="realizados, pagos ou cancelados" icone={<CheckCircle2 className="h-4 w-4" />} />
+          <Kpi titulo="Precisam de vocês" valor={String(nPrecisa)} detalhe="orçamentos para revisar, ordens para executar e notas a enviar" icone={<AlertTriangle className="h-4 w-4" />} destaque="bg-amber-50 text-amber-700" />
+          <Kpi titulo="Eventos solicitados" valor={String(nSolicitados)} detalhe="em orçamento, análise ou aprovados" icone={<CalendarDays className="h-4 w-4" />} />
+          <Kpi titulo="Eventos realizados" valor={String(grupos.precisaReal.length + grupos.realizados.length)} detalhe="já feitos, com nota e pagamento" icone={<CheckCircle2 className="h-4 w-4" />} />
+        </div>
+
+        <div data-print-hide className="inline-flex rounded-xl bg-slate-200/60 p-1">
+          {(
+            [
+              ['solicitado', 'Eventos solicitados', nSolicitados],
+              ['realizado', 'Eventos realizados', nRealizados],
+            ] as const
+          ).map(([id, rotulo, n]) => (
+            <button
+              key={id}
+              onClick={() => {
+                setAbaPortal(id);
+                setSelId('');
+              }}
+              className={`rounded-lg px-4 py-2 text-sm font-medium ${abaPortal === id ? 'bg-white text-cremesp-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              {rotulo} <span className="ml-1 opacity-60">{n}</span>
+            </button>
+          ))}
         </div>
 
         {eventos.length === 0 ? (
@@ -4166,9 +4491,18 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
         ) : (
           <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)] print:block">
             <Card data-print-hide className="max-h-[75vh] self-start overflow-y-auto pb-2">
-              <Secao titulo="Precisa de vocês" lista={grupos.precisa} vazio="Nada pendente." />
-              <Secao titulo="Em andamento" lista={grupos.andamento} vazio="Nenhum evento." />
-              <Secao titulo="Passados" lista={grupos.passados} vazio="Nenhum evento." />
+              {abaPortal === 'solicitado' ? (
+                <>
+                  <Secao titulo="Precisa de vocês" lista={grupos.precisaSol} vazio="Nada pendente." />
+                  <Secao titulo="Em andamento" lista={grupos.solicitados} vazio="Nenhum evento." />
+                </>
+              ) : (
+                <>
+                  <Secao titulo="Enviar nota fiscal" lista={grupos.precisaReal} vazio="Nada pendente." />
+                  <Secao titulo="Realizados" lista={grupos.realizados} vazio="Nenhum evento." />
+                  {grupos.cancelados.length > 0 && <Secao titulo="Cancelados" lista={grupos.cancelados} vazio="" />}
+                </>
+              )}
             </Card>
 
             {evento && (
@@ -4214,6 +4548,7 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
                         placeholder="Observações ou ajuste necessário (obrigatório para pedir ajuste)"
                         onChange={(e) => setTexto(e.target.value)}
                       />
+                      <SeletorAnexos arquivos={arqRevisao} setArquivos={setArqRevisao} disabled={enviando} rotulo="Anexar orçamento ou arquivos" />
                       <div className="flex flex-wrap gap-2">
                         <Botao variante="sucesso" icone={<CheckCircle2 className="h-4 w-4" />} disabled={enviando} onClick={() => void agir('confirmar')}>
                           Confirmar orçamento
@@ -4277,18 +4612,45 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
                   </div>
                 </Card>
 
+                {ETAPAS_NOTA_FISCAL.includes(etapa) && (
+                  <Card data-print-hide className="border-blue-200">
+                    <CardHeader
+                      titulo="Nota fiscal"
+                      subtitulo={etapa === 'nota_recebida' ? 'Nota já enviada. Se precisar, envie uma versão corrigida.' : 'Depois do evento, anexe aqui a nota fiscal para o Cremesp.'}
+                      icone={<FileText className="h-4 w-4" />}
+                    />
+                    <div className="space-y-3 p-5">
+                      {(() => {
+                        const notas = anexosDoEvento(evento).filter((x) => x.h.acao === 'nota_fiscal');
+                        return notas.length > 0 ? (
+                          <div>
+                            <p className="text-xs font-medium text-slate-500">Notas enviadas</p>
+                            <ListaAnexos anexos={notas.map((x) => x.a)} abrir={abrir} />
+                          </div>
+                        ) : null;
+                      })()}
+                      <input className={inputCls} value={textoNota} onChange={(e) => setTextoNota(e.target.value)} placeholder="Número da nota e observações (opcional)" />
+                      <SeletorAnexos arquivos={arqNota} setArquivos={setArqNota} disabled={enviando} rotulo="Anexar nota fiscal (PDF ou XML)" />
+                      <Botao variante="primario" icone={enviando ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} disabled={enviando || arqNota.length === 0} onClick={() => void agir('nota_fiscal')}>
+                        Enviar nota fiscal
+                      </Botao>
+                    </div>
+                  </Card>
+                )}
+
                 <div className="grid gap-5 xl:grid-cols-2 print:block">
                   <Card>
                     <CardHeader titulo="Andamento" subtitulo="Cada etapa registrada pelo Cremesp e por vocês" icone={<ListChecks className="h-4 w-4" />} />
                     <div className="p-5">
-                      <LinhaDoTempo historico={evento.historico ?? []} fornecedor />
+                      <LinhaDoTempo historico={evento.historico ?? []} fornecedor abrir={abrir} />
                     </div>
                   </Card>
                   <Card data-print-hide>
-                    <CardHeader titulo="Mensagem para o Cremesp" subtitulo="Ex.: número da nota fiscal, dúvida sobre montagem, contato da equipe" icone={<Pencil className="h-4 w-4" />} />
+                    <CardHeader titulo="Mensagem para o Cremesp" subtitulo="Ex.: dúvida sobre montagem, contato da equipe, arquivos do evento" icone={<Pencil className="h-4 w-4" />} />
                     <div className="space-y-3 p-5">
                       <textarea className={`${inputCls} min-h-[90px]`} value={textoMsg} onChange={(e) => setTextoMsg(e.target.value)} placeholder="Escreva aqui" />
-                      <Botao variante="primario" disabled={enviando || !textoMsg.trim()} onClick={() => void agir('mensagem')}>
+                      <SeletorAnexos arquivos={arqMsg} setArquivos={setArqMsg} disabled={enviando} />
+                      <Botao variante="primario" disabled={enviando || (!textoMsg.trim() && arqMsg.length === 0)} onClick={() => void agir('mensagem')}>
                         {enviando ? 'Enviando…' : 'Enviar mensagem'}
                       </Botao>
                     </div>
@@ -4315,6 +4677,7 @@ function AppCompartilhado({ cliente, sessao, inicial, sincronizadoInicial }: { c
       painelConta={<PainelConta email={email} status={status} sair={() => void cliente.auth.signOut()} />}
       painelEquipe={<PainelEquipe cliente={cliente} meuEmail={email.toLowerCase()} />}
       usuario={email}
+      cliente={cliente}
     />
   );
 }

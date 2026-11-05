@@ -35,7 +35,11 @@ Os demais arquivos (`main.tsx`, `index.css`, configs) só montam o projeto.
 - Aprovar pela aba Andamento faz a mesma checagem de saldo do Simulador. Evento cancelado não abate nem reserva saldo.
 - O fornecedor entra pelo mesmo link com login próprio e vê o **Portal do Fornecedor**: eventos que precisam dele,
   em andamento e passados, com itens, valores e histórico. Ele confirma o orçamento, pede ajuste ou manda mensagem.
-- Para ativar no banco, rode `supabase/portal-fornecedor.sql` (passo a passo em COMPARTILHAR-COM-O-SETOR.md).
+- A aba **Eventos e andamento** separa **eventos solicitados**, **realizados** e **cancelados**. O portal do fornecedor tem as
+  mesmas abas (solicitados e realizados).
+- **Anexos**: em cada etapa a equipe e o fornecedor podem anexar arquivos (até 20 MB cada). Depois da aprovação o fornecedor
+  envia a **nota fiscal** pelo portal, e ela aparece em destaque para a equipe em *Anexos do evento*.
+- Para ativar no banco, rode `supabase/portal-fornecedor.sql` e depois `supabase/anexos.sql` (passo a passo em COMPARTILHAR-COM-O-SETOR.md).
 
 ## Relatórios
 
