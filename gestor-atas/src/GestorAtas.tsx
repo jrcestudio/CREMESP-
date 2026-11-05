@@ -102,6 +102,9 @@ interface Evento {
   responsavel: string;
   status: StatusEvento;
   observacoes: string;
+  /** Protocolo interno do Cremesp, informado depois que o orçamento do fornecedor é recebido */
+  protocolo?: string;
+  orcamentoRecebidoEm?: string;
   linhas: Record<string, LinhaEvento>;
   atualizadoEm: string;
   confirmadoEm?: string;
@@ -293,6 +296,8 @@ function criarBaseExemplo(): Base {
       ]),
       atualizadoEm: agora,
       confirmadoEm: '2026-11-16T12:00:00.000Z',
+      protocolo: 'EXEMPLO-0001/2026',
+      orcamentoRecebidoEm: '2026-11-12',
     },
     {
       id: 'ev-2',
@@ -311,6 +316,8 @@ function criarBaseExemplo(): Base {
       ]),
       atualizadoEm: agora,
       confirmadoEm: '2026-11-20T12:00:00.000Z',
+      protocolo: 'EXEMPLO-0002/2026',
+      orcamentoRecebidoEm: '2026-11-18',
     },
     {
       id: 'ev-3',
@@ -328,6 +335,8 @@ function criarBaseExemplo(): Base {
       ]),
       atualizadoEm: agora,
       confirmadoEm: '2026-11-25T12:00:00.000Z',
+      protocolo: 'EXEMPLO-0003/2026',
+      orcamentoRecebidoEm: '2026-11-23',
     },
     {
       id: 'ev-4',
@@ -846,6 +855,8 @@ export default function GestorAtas() {
           nome: `${copiaDe.nome} (cópia)`,
           status: 'simulacao',
           confirmadoEm: undefined,
+          protocolo: '',
+          orcamentoRecebidoEm: '',
           linhas: JSON.parse(JSON.stringify(copiaDe.linhas)) as Record<string, LinhaEvento>,
           atualizadoEm: new Date().toISOString(),
         }
@@ -1262,6 +1273,11 @@ function DashboardAba({
                   <div className="flex items-center gap-2">
                     <StatusBadge status={ev.status} />
                     <span className="text-xs text-slate-400">OS {ev.numero}</span>
+                    {ev.protocolo ? (
+                      <span className="text-xs text-slate-500">· Prot. {ev.protocolo}</span>
+                    ) : (
+                      <span className="text-xs text-amber-700">· sem protocolo</span>
+                    )}
                   </div>
                   <p className="mt-1 truncate text-sm font-medium text-slate-800">{ev.nome}</p>
                   <p className="text-xs text-slate-500">{periodo(ev)}</p>
@@ -1543,6 +1559,11 @@ function SimuladorAba({
             </p>
           )}
           {foraVigencia && <p className="rounded-lg bg-rose-50 p-2 text-rose-800">A data do evento está fora da vigência da Ata.</p>}
+          {!evento.protocolo?.trim() && (
+            <p className="rounded-lg bg-amber-50 p-2 text-amber-800">
+              Este evento ainda não tem protocolo interno do Cremesp. Você pode confirmar assim e informar o protocolo depois, na aba Ordem de Orçamento.
+            </p>
+          )}
           <p className="text-xs text-slate-500">Para alterar depois, use “Reabrir para edição”: o saldo volta a ficar disponível.</p>
         </div>
       ),
@@ -1981,6 +2002,7 @@ function OrdemAba({
   const textoResumo = () => {
     const linhasTxt: string[] = [];
     linhasTxt.push(`*${tituloDoc} Nº ${evento.numero}*`);
+    if (evento.protocolo?.trim()) linhasTxt.push(`*Protocolo Cremesp:* ${evento.protocolo.trim()}`);
     linhasTxt.push(`Ref.: ${ata.numero}${ata.pregao ? ` · ${ata.pregao}` : ''}`);
     linhasTxt.push(`Fornecedor: ${ata.fornecedor}${ata.cnpj ? ` (CNPJ ${ata.cnpj})` : ''}`);
     linhasTxt.push('');
@@ -2040,7 +2062,30 @@ function OrdemAba({
       </div>
 
       <div data-print-hide>
-        <Card className="p-4">
+        <Card className="space-y-4 p-4">
+          <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_200px] lg:grid-cols-[minmax(0,1fr)_200px_minmax(0,1.4fr)]">
+            <Campo rotulo="Protocolo interno Cremesp">
+              <input
+                className={`${inputCls} ${evento.protocolo?.trim() ? '' : 'border-amber-300 bg-amber-50/50'}`}
+                value={evento.protocolo ?? ''}
+                placeholder="Informe após receber o orçamento"
+                onChange={(e) => atualizar(evento.id, { protocolo: e.target.value })}
+              />
+            </Campo>
+            <Campo rotulo="Orçamento recebido em">
+              <input
+                type="date"
+                className={inputCls}
+                value={evento.orcamentoRecebidoEm ?? ''}
+                onChange={(e) => atualizar(evento.id, { orcamentoRecebidoEm: e.target.value })}
+              />
+            </Campo>
+            <p className="flex items-end pb-2 text-xs text-slate-500 sm:col-span-2 lg:col-span-1">
+              {evento.protocolo?.trim()
+                ? 'O protocolo aparece no cabeçalho do documento e no resumo para WhatsApp/e-mail.'
+                : 'Sem protocolo, o documento sai com um espaço em branco para preencher à mão.'}
+            </p>
+          </div>
           <Campo rotulo="Observações técnicas / logísticas (aparecem no documento)">
             <textarea
               className={`${inputCls} min-h-[72px]`}
@@ -2070,6 +2115,15 @@ function OrdemAba({
               <p className="text-[11px] uppercase tracking-wide text-slate-500">Nº do documento</p>
               <p className="text-lg font-bold tabular-nums">{evento.numero}</p>
               <p className="text-[11px] text-slate-500">Emissão: {fmtData(hojeISO())}</p>
+              <div className="mt-2 rounded border border-slate-300 px-2 py-1 text-left">
+                <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Protocolo Cremesp</p>
+                {evento.protocolo?.trim() ? (
+                  <p className="text-[12px] font-semibold tabular-nums">{evento.protocolo.trim()}</p>
+                ) : (
+                  <p className="mt-3 w-40 border-b border-slate-400" />
+                )}
+                {evento.orcamentoRecebidoEm && <p className="text-[10px] text-slate-500">Orçamento recebido em {fmtData(evento.orcamentoRecebidoEm)}</p>}
+              </div>
             </div>
           </header>
 

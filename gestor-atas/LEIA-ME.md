@@ -19,6 +19,8 @@ Os demais arquivos (`main.tsx`, `index.css`, configs) só montam o projeto.
 - Cada item consome da Ata `quantidade × diárias` (as unidades da Ata são diárias).
 - **Aprovado / Consumir Saldo** abate do saldo; **Em Simulação** apenas reserva.
 - Não é possível aprovar um evento com item acima do saldo disponível.
+- Cada evento tem um campo de **protocolo interno do Cremesp** (e data de recebimento do orçamento), preenchido na aba Ordem
+  depois que o fornecedor responde. Ele aparece no cabeçalho do documento e no resumo para WhatsApp/e-mail.
 - Os dados ficam salvos no navegador (`localStorage`). Use *Exportar backup* na Configuração para guardar uma cópia
   ou levar para outro computador.
 
