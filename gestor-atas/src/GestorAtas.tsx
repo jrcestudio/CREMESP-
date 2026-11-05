@@ -19,6 +19,7 @@ import {
   Filter,
   Layers,
   LayoutDashboard,
+  ListChecks,
   Lock,
   LogOut,
   Users,
@@ -116,6 +117,105 @@ interface Evento {
   linhas: Record<string, LinhaEvento>;
   atualizadoEm: string;
   confirmadoEm?: string;
+  /** Etapa do andamento (fluxo com o fornecedor, diretoria, protocolo e pagamento) */
+  etapa?: Etapa;
+  /** Histórico de tudo o que aconteceu com o evento, do mais antigo para o mais novo */
+  historico?: Andamento[];
+}
+
+type Etapa =
+  | 'rascunho'
+  | 'revisao_fornecedor'
+  | 'ajuste_solicitado'
+  | 'revisado_fornecedor'
+  | 'aguardando_diretoria'
+  | 'aprovado'
+  | 'protocolado'
+  | 'os_enviada'
+  | 'realizado'
+  | 'nota_recebida'
+  | 'pagamento'
+  | 'pago'
+  | 'cancelado';
+
+interface Andamento {
+  id: string;
+  em: string;
+  por: string;
+  lado: 'equipe' | 'fornecedor';
+  etapa: Etapa;
+  /** 'etapa' (mudança de etapa), 'mensagem', 'confirmar' ou 'ajuste' (respostas do fornecedor) */
+  acao?: string;
+  mensagem?: string;
+}
+
+type ComQuem = 'equipe' | 'fornecedor' | 'concluido';
+
+interface InfoEtapa {
+  id: Etapa;
+  rotulo: string;
+  /** Como a etapa aparece no portal do fornecedor */
+  rotuloFornecedor: string;
+  /** Texto do botão que leva a esta etapa */
+  acao: string;
+  com: ComQuem;
+  cor: string;
+}
+
+const ETAPAS: InfoEtapa[] = [
+  { id: 'rascunho', rotulo: 'Rascunho interno', rotuloFornecedor: 'Em preparação no Cremesp', acao: 'Voltar para rascunho', com: 'equipe', cor: 'bg-slate-100 text-slate-700 ring-slate-200' },
+  { id: 'revisao_fornecedor', rotulo: 'Com o fornecedor para revisar', rotuloFornecedor: 'Revisar orçamento', acao: 'Enviar ao fornecedor para revisar o orçamento', com: 'fornecedor', cor: 'bg-amber-50 text-amber-800 ring-amber-200' },
+  { id: 'ajuste_solicitado', rotulo: 'Fornecedor pediu ajuste', rotuloFornecedor: 'Ajuste solicitado, aguardando o Cremesp', acao: 'Registrar pedido de ajuste', com: 'equipe', cor: 'bg-rose-50 text-rose-700 ring-rose-200' },
+  { id: 'revisado_fornecedor', rotulo: 'Revisado pelo fornecedor', rotuloFornecedor: 'Orçamento confirmado, aguardando o Cremesp', acao: 'Marcar como revisado pelo fornecedor', com: 'equipe', cor: 'bg-sky-50 text-sky-800 ring-sky-200' },
+  { id: 'aguardando_diretoria', rotulo: 'Aguardando aprovação da diretoria', rotuloFornecedor: 'Em aprovação no Cremesp', acao: 'Enviar para aprovação da diretoria', com: 'equipe', cor: 'bg-violet-50 text-violet-800 ring-violet-200' },
+  { id: 'aprovado', rotulo: 'Aprovado', rotuloFornecedor: 'Aprovado pelo Cremesp', acao: 'Aprovar (abate do saldo da Ata)', com: 'equipe', cor: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
+  { id: 'protocolado', rotulo: 'Protocolado', rotuloFornecedor: 'Aprovado e protocolado', acao: 'Registrar protocolo', com: 'equipe', cor: 'bg-emerald-50 text-emerald-800 ring-emerald-200' },
+  { id: 'os_enviada', rotulo: 'Ordem de serviço enviada', rotuloFornecedor: 'Ordem de serviço emitida: executar o evento', acao: 'Enviar ordem de serviço ao fornecedor', com: 'fornecedor', cor: 'bg-teal-50 text-teal-800 ring-teal-200' },
+  { id: 'realizado', rotulo: 'Evento realizado', rotuloFornecedor: 'Evento realizado: enviar a nota fiscal', acao: 'Marcar evento como realizado', com: 'fornecedor', cor: 'bg-cremesp-50 text-cremesp-800 ring-cremesp-200' },
+  { id: 'nota_recebida', rotulo: 'Nota fiscal recebida', rotuloFornecedor: 'Nota fiscal recebida pelo Cremesp', acao: 'Registrar nota fiscal recebida', com: 'equipe', cor: 'bg-blue-50 text-blue-800 ring-blue-200' },
+  { id: 'pagamento', rotulo: 'Nota enviada para pagamento', rotuloFornecedor: 'Nota enviada para pagamento', acao: 'Enviar nota para pagamento', com: 'equipe', cor: 'bg-indigo-50 text-indigo-800 ring-indigo-200' },
+  { id: 'pago', rotulo: 'Pago', rotuloFornecedor: 'Pago', acao: 'Marcar como pago', com: 'concluido', cor: 'bg-emerald-600 text-white ring-emerald-600' },
+  { id: 'cancelado', rotulo: 'Cancelado', rotuloFornecedor: 'Cancelado', acao: 'Cancelar evento', com: 'concluido', cor: 'bg-slate-100 text-slate-500 ring-slate-200' },
+];
+
+const INFO_ETAPA = new Map(ETAPAS.map((e) => [e.id, e]));
+const infoEtapa = (id: Etapa): InfoEtapa => INFO_ETAPA.get(id) ?? ETAPAS[0];
+const indiceEtapa = (id: Etapa) => ETAPAS.findIndex((e) => e.id === id);
+/** Etapas em que o evento já está aprovado e abate o saldo da Ata */
+const etapaAprovada = (id: Etapa) => id !== 'cancelado' && indiceEtapa(id) >= indiceEtapa('aprovado');
+
+/** Etapa atual; eventos antigos (sem etapa) seguem o status */
+function etapaDe(ev: Evento): Etapa {
+  if (ev.etapa && INFO_ETAPA.has(ev.etapa)) return ev.etapa;
+  return ev.status === 'aprovado' ? 'aprovado' : 'rascunho';
+}
+
+/** Próximo passo sugerido a partir de cada etapa */
+const PROXIMA_ETAPA: Partial<Record<Etapa, Etapa>> = {
+  rascunho: 'revisao_fornecedor',
+  ajuste_solicitado: 'revisao_fornecedor',
+  revisao_fornecedor: 'revisado_fornecedor',
+  revisado_fornecedor: 'aguardando_diretoria',
+  aguardando_diretoria: 'aprovado',
+  aprovado: 'protocolado',
+  protocolado: 'os_enviada',
+  os_enviada: 'realizado',
+  realizado: 'nota_recebida',
+  nota_recebida: 'pagamento',
+  pagamento: 'pago',
+};
+
+/** Muda a etapa, registra no histórico e mantém o status (saldo) coerente */
+function patchEtapa(e: Evento, etapa: Etapa, por: string, mensagem = '', acao = 'etapa'): Partial<Evento> {
+  const entrada: Andamento = { id: uid('and'), em: new Date().toISOString(), por, lado: 'equipe', etapa, acao };
+  if (mensagem.trim()) entrada.mensagem = mensagem.trim();
+  const aprovado = etapaAprovada(etapa);
+  return {
+    etapa,
+    historico: [...(e.historico ?? []), entrada],
+    status: aprovado ? 'aprovado' : 'simulacao',
+    confirmadoEm: aprovado ? e.confirmadoEm ?? new Date().toISOString() : undefined,
+  };
 }
 
 interface Base {
@@ -126,7 +226,7 @@ interface Base {
   eventos: Evento[];
 }
 
-type Aba = 'dashboard' | 'simulador' | 'ordem' | 'relatorios' | 'config';
+type Aba = 'dashboard' | 'simulador' | 'ordem' | 'andamento' | 'relatorios' | 'config';
 
 // ---------------------------------------------------------------- Cores
 
@@ -507,7 +607,7 @@ function calcularUsoTotal(eventos: Evento[], usoPorEvento: Map<string, Map<strin
   const total = new Map<string, Uso>();
   for (const ev of eventos) {
     const porItem = usoPorEvento.get(ev.id);
-    if (!porItem) continue;
+    if (!porItem || etapaDe(ev) === 'cancelado') continue;
     for (const [itemId, c] of porItem) {
       const u = total.get(itemId) ?? { consumido: 0, simulacao: 0 };
       if (ev.status === 'aprovado') u.consumido += c;
@@ -669,15 +769,52 @@ function ChipModulo({ modulo }: { modulo?: Modulo }) {
   );
 }
 
-function StatusBadge({ status }: { status: StatusEvento }) {
-  return status === 'aprovado' ? (
-    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200">
-      <CheckCircle2 className="h-3 w-3" /> Aprovado
+function EtapaBadge({ etapa, fornecedor = false }: { etapa: Etapa; fornecedor?: boolean }) {
+  const e = infoEtapa(etapa);
+  return (
+    <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ring-inset ${e.cor}`}>
+      {fornecedor ? e.rotuloFornecedor : e.rotulo}
     </span>
-  ) : (
-    <span className="inline-flex items-center gap-1 rounded-full bg-cremesp-50 px-2 py-0.5 text-[11px] font-semibold text-cremesp-700 ring-1 ring-inset ring-cremesp-200">
-      <Pencil className="h-3 w-3" /> Em simulação
-    </span>
+  );
+}
+
+function fmtDataHora(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function LinhaDoTempo({ historico, fornecedor = false }: { historico: Andamento[]; fornecedor?: boolean }) {
+  if (historico.length === 0) return <p className="text-sm text-slate-500">Nenhum andamento registrado ainda.</p>;
+  return (
+    <ol className="relative space-y-4 border-l border-slate-200 pl-5">
+      {[...historico].reverse().map((h) => {
+        const doFornecedor = h.lado === 'fornecedor';
+        const titulo =
+          h.acao === 'mensagem'
+            ? doFornecedor
+              ? 'Mensagem do fornecedor'
+              : 'Mensagem do Cremesp'
+            : h.acao === 'confirmar'
+              ? 'Fornecedor confirmou o orçamento'
+              : h.acao === 'ajuste'
+                ? 'Fornecedor pediu ajuste'
+                : fornecedor
+                  ? infoEtapa(h.etapa).rotuloFornecedor
+                  : infoEtapa(h.etapa).rotulo;
+        return (
+          <li key={h.id} className="relative">
+            <span className={`absolute -left-[26px] top-1 h-3 w-3 rounded-full ring-4 ring-white ${doFornecedor ? 'bg-amber-500' : 'bg-cremesp-600'}`} />
+            <p className="text-sm font-medium text-slate-900">{titulo}</p>
+            <p className="text-xs text-slate-500">
+              {fmtDataHora(h.em)} · {doFornecedor ? 'Fornecedor' : 'Cremesp'}
+              {h.por && !fornecedor ? ` (${h.por})` : ''}
+            </p>
+            {h.mensagem && <p className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{h.mensagem}</p>}
+          </li>
+        );
+      })}
+    </ol>
   );
 }
 
@@ -726,12 +863,14 @@ function AppGestor({
   compartilhado = false,
   painelConta,
   painelEquipe,
+  usuario = 'Equipe',
 }: {
   base: Base;
   setBase: Dispatch<SetStateAction<Base>>;
   compartilhado?: boolean;
   painelConta?: ReactNode;
   painelEquipe?: ReactNode;
+  usuario?: string;
 }) {
   const [aba, setAba] = useState<Aba>('dashboard');
   const [eventoSelId, setEventoSelId] = useState<string>(() => {
@@ -847,6 +986,7 @@ function AppGestor({
     { id: 'dashboard', rotulo: 'Dashboard & Saldos', curto: 'Saldos', icone: <LayoutDashboard className="h-4 w-4" /> },
     { id: 'simulador', rotulo: 'Simulador de Evento', curto: 'Simulador', icone: <Layers className="h-4 w-4" /> },
     { id: 'ordem', rotulo: 'Ordem de Orçamento', curto: 'Ordem', icone: <FileText className="h-4 w-4" /> },
+    { id: 'andamento', rotulo: 'Andamento', curto: 'Andamento', icone: <ListChecks className="h-4 w-4" /> },
     { id: 'relatorios', rotulo: 'Relatórios', curto: 'Relatórios', icone: <BarChart3 className="h-4 w-4" /> },
     { id: 'config', rotulo: 'Configuração da Ata', curto: 'Config.', icone: <Settings className="h-4 w-4" /> },
   ];
@@ -916,7 +1056,7 @@ function AppGestor({
           </div>
         </div>
         {painelConta && <div className="px-4 pb-2">{painelConta}</div>}
-        <nav className="grid grid-cols-5 border-t border-slate-100">
+        <nav className="grid grid-cols-6 border-t border-slate-100">
           {ABAS.map((a) => (
             <button
               key={a.id}
@@ -965,8 +1105,27 @@ function AppGestor({
               novoEvento={novoEvento}
               excluirEvento={excluirEvento}
               irParaOrdem={(id) => irParaEvento(id, 'ordem')}
+              irParaAndamento={(id) => irParaEvento(id, 'andamento')}
+              usuario={usuario}
               avisar={avisar}
               abrirDialogo={setDialogo}
+            />
+          )}
+          {aba === 'andamento' && (
+            <AndamentoAba
+              ata={ata}
+              eventos={eventos}
+              evento={eventoSel}
+              itensPorId={itensPorId}
+              usoTotal={usoTotal}
+              usoPorEvento={usoPorEvento}
+              selecionar={setEventoSelId}
+              atualizar={atualizarEvento}
+              usuario={usuario}
+              compartilhado={compartilhado}
+              avisar={avisar}
+              abrirDialogo={setDialogo}
+              irParaEvento={irParaEvento}
             />
           )}
           {aba === 'ordem' && (
@@ -1123,7 +1282,7 @@ function DashboardAba({
   );
 
   const eventosOrdenados = useMemo(() => [...eventos].sort((a, b) => (b.dataInicio || '').localeCompare(a.dataInicio || '')), [eventos]);
-  const qtdSim = eventos.filter((e) => e.status === 'simulacao').length;
+  const qtdSim = eventos.filter((e) => e.status === 'simulacao' && etapaDe(e) !== 'cancelado').length;
   const qtdAprov = eventos.length - qtdSim;
   const pctUtil = financeiro.total ? (financeiro.utilizado / financeiro.total) * 100 : 0;
   const pctSim = financeiro.total ? (financeiro.simulacao / financeiro.total) * 100 : 0;
@@ -1217,7 +1376,7 @@ function DashboardAba({
               <div key={ev.id} className="flex items-center justify-between gap-3 px-5 py-3">
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <StatusBadge status={ev.status} />
+                    <EtapaBadge etapa={etapaDe(ev)} />
                     <span className="text-xs text-slate-400">OS {ev.numero}</span>
                     {ev.protocolo ? (
                       <span className="text-xs text-slate-500">· Prot. {ev.protocolo}</span>
@@ -1372,6 +1531,8 @@ function SimuladorAba({
   novoEvento,
   excluirEvento,
   irParaOrdem,
+  irParaAndamento,
+  usuario,
   avisar,
   abrirDialogo,
 }: {
@@ -1390,6 +1551,8 @@ function SimuladorAba({
   novoEvento: (copiaDe?: Evento) => void;
   excluirEvento: (ev: Evento) => void;
   irParaOrdem: (id: string) => void;
+  irParaAndamento: (id: string) => void;
+  usuario: string;
   avisar: (t: string, tipo?: 'ok' | 'erro') => void;
   abrirDialogo: (d: DialogoConfig) => void;
 }) {
@@ -1514,7 +1677,11 @@ function SimuladorAba({
         </div>
       ),
       aoConfirmar: () => {
-        atualizar(evento.id, { status: 'aprovado', confirmadoEm: new Date().toISOString() });
+        atualizar(evento.id, (e) =>
+          etapaAprovada(etapaDe(e))
+            ? { status: 'aprovado', confirmadoEm: new Date().toISOString() }
+            : patchEtapa(e, 'aprovado', usuario, 'Aprovado no Simulador.'),
+        );
         avisar('Evento confirmado. Saldo da Ata atualizado.');
       },
     });
@@ -1526,7 +1693,7 @@ function SimuladorAba({
       confirmar: 'Reabrir como simulação',
       mensagem: <p>O evento volta para “Em simulação” e as quantidades deixam de ser abatidas do saldo da Ata até nova confirmação.</p>,
       aoConfirmar: () => {
-        atualizar(evento.id, { status: 'simulacao', confirmadoEm: undefined });
+        atualizar(evento.id, (e) => patchEtapa(e, 'rascunho', usuario, 'Reaberto para edição no Simulador.'));
         avisar('Evento reaberto como simulação.');
       },
     });
@@ -1654,6 +1821,13 @@ function SimuladorAba({
                 </div>
               }
             />
+            <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 px-5 py-2.5 text-xs text-slate-500">
+              <span>Andamento:</span>
+              <EtapaBadge etapa={etapaDe(evento)} />
+              <button className="font-medium text-cremesp-700 hover:underline" onClick={() => irParaAndamento(evento.id)}>
+                Ver histórico e avançar etapa
+              </button>
+            </div>
             <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-6">
               <Campo rotulo="Nome do evento" className="sm:col-span-2 lg:col-span-3">
                 <input className={inputCls} value={evento.nome} onChange={(e) => atualizar(evento.id, { nome: e.target.value })} />
@@ -2249,7 +2423,7 @@ function RelatoriosAba({
   const linhas: LinhaRelatorio[] = useMemo(
     () =>
       eventos
-        .filter((ev) => ev.status === 'aprovado' || incluirSim)
+        .filter((ev) => etapaDe(ev) !== 'cancelado' && (ev.status === 'aprovado' || incluirSim))
         .map((ev) => {
           const itens: LinhaRelatorio['itens'] = [];
           const porModulo = new Map<string, number>();
@@ -2336,7 +2510,7 @@ function RelatoriosAba({
     const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
     const dec = (v: number) => v.toFixed(2).replace('.', ',');
     const nomesModulo = new Map(modulos.map((m) => [m.id, m.nome]));
-    const cab = ['Período', 'OS', 'Protocolo Cremesp', 'Evento', 'Início', 'Término', 'Local', 'Status', 'Módulo', 'Item', 'Descrição', 'Unidade', 'Qtd.', 'Diárias', 'Valor unitário', 'Subtotal'];
+    const cab = ['Período', 'OS', 'Protocolo Cremesp', 'Evento', 'Início', 'Término', 'Local', 'Etapa', 'Módulo', 'Item', 'Descrição', 'Unidade', 'Qtd.', 'Diárias', 'Valor unitário', 'Subtotal'];
     const rows = [cab.map(esc).join(';')];
     for (const l of doRecorte)
       for (const { it, l: li, subtotal } of l.itens)
@@ -2349,7 +2523,7 @@ function RelatoriosAba({
             esc(fmtData(l.ev.dataInicio)),
             esc(fmtData(l.ev.dataFim || l.ev.dataInicio)),
             esc(l.ev.local),
-            esc(l.ev.status === 'aprovado' ? 'Aprovado' : 'Em simulação'),
+            esc(infoEtapa(etapaDe(l.ev)).rotulo),
             esc(nomesModulo.get(it.moduloId) ?? ''),
             esc(it.codigo),
             esc(it.descricao),
@@ -2596,7 +2770,7 @@ function RelatoriosAba({
                   <td className="px-3 py-2.5 font-medium text-slate-800">{ev.nome}</td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{periodo(ev)}</td>
                   <td className="px-3 py-2.5">
-                    <StatusBadge status={ev.status} />
+                    <EtapaBadge etapa={etapaDe(ev)} />
                   </td>
                   <td className="whitespace-nowrap px-3 py-2.5 text-right font-medium tabular-nums">{brl(total)}</td>
                   <td data-print-hide className="whitespace-nowrap px-5 py-2.5 text-right">
@@ -2620,6 +2794,351 @@ function RelatoriosAba({
           </table>
         </div>
       </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Aba: Andamento
+
+function tempoDesde(iso?: string): string {
+  if (!iso) return '';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(ms)) return '';
+  const min = Math.round(ms / 60000);
+  if (min < 1) return 'agora';
+  if (min < 60) return `há ${min} min`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `há ${h} h`;
+  const d = Math.round(h / 24);
+  return d === 1 ? 'há 1 dia' : `há ${d} dias`;
+}
+
+/** Itens que passariam do saldo da Ata se o evento fosse aprovado agora */
+function excessosAoAprovar(ev: Evento, usoTotal: Map<string, Uso>, usoPorEvento: Map<string, Map<string, number>>, itensPorId: Map<string, ItemAta>): number {
+  const meu = usoPorEvento.get(ev.id) ?? new Map<string, number>();
+  let n = 0;
+  for (const [itemId, c] of meu) {
+    const it = itensPorId.get(itemId);
+    if (!it) continue;
+    const u = usoTotal.get(itemId) ?? { consumido: 0, simulacao: 0 };
+    const consumidoOutros = u.consumido - (ev.status === 'aprovado' && etapaDe(ev) !== 'cancelado' ? c : 0);
+    if (c > it.qtdContratada - consumidoOutros) n += 1;
+  }
+  return n;
+}
+
+type FiltroAndamento = 'todos' | 'equipe' | 'fornecedor' | 'concluido';
+
+function AndamentoAba({
+  ata,
+  eventos,
+  evento,
+  itensPorId,
+  usoTotal,
+  usoPorEvento,
+  selecionar,
+  atualizar,
+  usuario,
+  compartilhado,
+  avisar,
+  abrirDialogo,
+  irParaEvento,
+}: {
+  ata: AtaInfo;
+  eventos: Evento[];
+  evento: Evento | null;
+  itensPorId: Map<string, ItemAta>;
+  usoTotal: Map<string, Uso>;
+  usoPorEvento: Map<string, Map<string, number>>;
+  selecionar: (id: string) => void;
+  atualizar: (id: string, patch: Partial<Evento> | ((e: Evento) => Partial<Evento>)) => void;
+  usuario: string;
+  compartilhado: boolean;
+  avisar: (t: string, tipo?: 'ok' | 'erro') => void;
+  abrirDialogo: (d: DialogoConfig) => void;
+  irParaEvento: (id: string, destino: Aba) => void;
+}) {
+  const [filtro, setFiltro] = useState<FiltroAndamento>('todos');
+  const etapaAtual = evento ? etapaDe(evento) : 'rascunho';
+  const [alvo, setAlvo] = useState<Etapa>(PROXIMA_ETAPA[etapaAtual] ?? etapaAtual);
+  const [mensagem, setMensagem] = useState('');
+  const [protocolo, setProtocolo] = useState(evento?.protocolo ?? '');
+
+  useEffect(() => {
+    setAlvo(PROXIMA_ETAPA[etapaAtual] ?? etapaAtual);
+    setMensagem('');
+    setProtocolo(evento?.protocolo ?? '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evento?.id, etapaAtual]);
+
+  const ultimaAtualizacao = (ev: Evento) => {
+    const h = ev.historico ?? [];
+    return h.length ? h[h.length - 1].em : ev.atualizadoEm;
+  };
+
+  const contagem = useMemo(() => {
+    const c = { todos: eventos.length, equipe: 0, fornecedor: 0, concluido: 0 };
+    for (const ev of eventos) c[infoEtapa(etapaDe(ev)).com] += 1;
+    return c;
+  }, [eventos]);
+
+  const lista = useMemo(
+    () =>
+      eventos
+        .filter((ev) => filtro === 'todos' || infoEtapa(etapaDe(ev)).com === filtro)
+        .sort((a, b) => (ultimaAtualizacao(b) ?? '').localeCompare(ultimaAtualizacao(a) ?? '')),
+    [eventos, filtro],
+  );
+
+  const copiarConvite = async () => {
+    const texto = [
+      `Olá! Este é o Portal do Fornecedor do Cremesp para a ${ata.numero || 'Ata de Registro de Preços'}.`,
+      `Nele vocês acompanham os eventos, revisam os orçamentos e veem cada etapa (aprovação, protocolo, nota e pagamento).`,
+      ``,
+      `Link: ${window.location.origin}`,
+      ``,
+      `No primeiro acesso, clique em "Primeiro acesso", use o e-mail cadastrado pelo Cremesp e crie uma senha.`,
+    ].join('\n');
+    avisar((await copiarTexto(texto)) ? 'Convite copiado. Cole no WhatsApp ou no e-mail do fornecedor.' : 'Não foi possível copiar.', 'ok');
+  };
+
+  const FILTROS: { id: FiltroAndamento; rotulo: string }[] = [
+    { id: 'todos', rotulo: 'Todos' },
+    { id: 'equipe', rotulo: 'Com a gente' },
+    { id: 'fornecedor', rotulo: 'Com o fornecedor' },
+    { id: 'concluido', rotulo: 'Concluídos' },
+  ];
+
+  const cabecalho = (
+    <div className="flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight">Andamento</h1>
+        <p className="mt-1 text-sm text-slate-500">Cada etapa do evento, do orçamento com o fornecedor até o pagamento da nota.</p>
+      </div>
+      {compartilhado && (
+        <Botao icone={<ClipboardCopy className="h-4 w-4" />} onClick={() => void copiarConvite()}>
+          Copiar convite para o fornecedor
+        </Botao>
+      )}
+    </div>
+  );
+
+  if (eventos.length === 0) {
+    return (
+      <div className="space-y-6">
+        {cabecalho}
+        <Card className="p-10 text-center text-sm text-slate-500">Nenhum evento ainda. Crie uma simulação no Simulador de Evento para começar.</Card>
+      </div>
+    );
+  }
+
+  const registrar = (soMensagem: boolean) => {
+    if (!evento) return;
+    if (soMensagem) {
+      if (!mensagem.trim()) {
+        avisar('Escreva a mensagem antes de enviar.', 'erro');
+        return;
+      }
+      atualizar(evento.id, (e) => ({
+        historico: [
+          ...(e.historico ?? []),
+          { id: uid('and'), em: new Date().toISOString(), por: usuario, lado: 'equipe', etapa: etapaDe(e), acao: 'mensagem', mensagem: mensagem.trim() },
+        ],
+      }));
+      setMensagem('');
+      avisar('Mensagem registrada. O fornecedor vê no portal.');
+      return;
+    }
+    if (alvo === etapaAtual) {
+      avisar('Escolha uma etapa diferente da atual, ou use “Só registrar mensagem”.', 'erro');
+      return;
+    }
+    const temItens = (usoPorEvento.get(evento.id)?.size ?? 0) > 0;
+    if ((alvo === 'revisao_fornecedor' || etapaAprovada(alvo)) && !temItens) {
+      avisar('Adicione itens ao evento no Simulador antes de seguir.', 'erro');
+      return;
+    }
+    if (etapaAprovada(alvo) && evento.status !== 'aprovado') {
+      const n = excessosAoAprovar(evento, usoTotal, usoPorEvento, itensPorId);
+      if (n > 0) {
+        avisar(`Não dá para aprovar: ${n} item(ns) passam do saldo da Ata. Ajuste no Simulador.`, 'erro');
+        return;
+      }
+    }
+    const aplicar = () => {
+      const prot = protocolo.trim();
+      atualizar(evento.id, (e) => ({
+        ...patchEtapa(e, alvo, usuario, mensagem),
+        ...(alvo === 'protocolado' && prot ? { protocolo: prot } : {}),
+      }));
+      setMensagem('');
+      avisar(`Etapa atualizada: ${infoEtapa(alvo).rotulo}.`);
+    };
+    const passaAprovar = etapaAprovada(alvo) && evento.status !== 'aprovado';
+    const desfazAprovacao = !etapaAprovada(alvo) && evento.status === 'aprovado';
+    if (alvo === 'cancelado' || passaAprovar || desfazAprovacao) {
+      abrirDialogo({
+        titulo: alvo === 'cancelado' ? 'Cancelar o evento?' : passaAprovar ? 'Aprovar o evento?' : 'Voltar o evento para antes da aprovação?',
+        variante: alvo === 'cancelado' ? 'perigo' : 'primario',
+        confirmar: alvo === 'cancelado' ? 'Cancelar evento' : 'Confirmar',
+        mensagem: (
+          <p>
+            {alvo === 'cancelado'
+              ? 'O evento deixa de abater ou reservar saldo da Ata. O histórico continua guardado.'
+              : passaAprovar
+                ? `O valor de ${brl(totalEvento(evento, itensPorId))} passa a ser abatido do saldo da Ata.`
+                : 'O valor volta a ficar disponível no saldo da Ata até uma nova aprovação.'}
+          </p>
+        ),
+        aoConfirmar: aplicar,
+      });
+      return;
+    }
+    aplicar();
+  };
+
+  const caminho = ETAPAS.filter((e) => e.id !== 'ajuste_solicitado' && e.id !== 'cancelado');
+  const posAtual = indiceEtapa(etapaAtual);
+
+  return (
+    <div className="space-y-6">
+      {cabecalho}
+
+      <div className="flex flex-wrap gap-2">
+        {FILTROS.map((f) => (
+          <button
+            key={f.id}
+            onClick={() => setFiltro(f.id)}
+            className={`rounded-full px-3 py-1.5 text-sm font-medium ring-1 ring-inset ${
+              filtro === f.id ? 'bg-cremesp-700 text-white ring-cremesp-700' : 'bg-white text-slate-600 ring-slate-300 hover:bg-slate-50'
+            }`}
+          >
+            {f.rotulo} <span className="ml-1 opacity-70">{contagem[f.id]}</span>
+          </button>
+        ))}
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-[360px_minmax(0,1fr)]">
+        <Card className="self-start overflow-hidden">
+          <ul className="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto">
+            {lista.map((ev) => (
+              <li key={ev.id}>
+                <button
+                  onClick={() => selecionar(ev.id)}
+                  className={`block w-full px-4 py-3 text-left transition ${evento?.id === ev.id ? 'bg-cremesp-50' : 'hover:bg-slate-50'}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-slate-400">OS {ev.numero}</span>
+                    <span className="text-[11px] text-slate-400">{tempoDesde(ultimaAtualizacao(ev))}</span>
+                  </div>
+                  <p className="mt-0.5 truncate text-sm font-medium text-slate-900">{ev.nome}</p>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                    <EtapaBadge etapa={etapaDe(ev)} />
+                    <span className="text-xs text-slate-500">{fmtData(ev.dataInicio)}</span>
+                  </div>
+                </button>
+              </li>
+            ))}
+            {lista.length === 0 && <li className="px-4 py-6 text-sm text-slate-500">Nenhum evento neste filtro.</li>}
+          </ul>
+        </Card>
+
+        {evento ? (
+          <div className="min-w-0 space-y-5">
+            <Card>
+              <CardHeader
+                titulo={`OS ${evento.numero} · ${evento.nome}`}
+                subtitulo={`${periodo(evento)}${evento.local ? ` · ${evento.local}` : ''} · ${brl(totalEvento(evento, itensPorId))}${evento.protocolo ? ` · Protocolo ${evento.protocolo}` : ''}`}
+                icone={<CalendarDays className="h-4 w-4" />}
+                acoes={
+                  <>
+                    <Botao tamanho="sm" onClick={() => irParaEvento(evento.id, 'simulador')}>
+                      Simulador
+                    </Botao>
+                    <Botao tamanho="sm" onClick={() => irParaEvento(evento.id, 'ordem')}>
+                      Ordem
+                    </Botao>
+                  </>
+                }
+              />
+              <div className="space-y-4 p-5">
+                <div className="flex flex-wrap items-center gap-2 text-sm">
+                  <span className="text-slate-500">Etapa atual:</span>
+                  <EtapaBadge etapa={etapaAtual} />
+                  <span className="text-xs text-slate-500">
+                    {infoEtapa(etapaAtual).com === 'fornecedor'
+                      ? 'Aguardando o fornecedor'
+                      : infoEtapa(etapaAtual).com === 'equipe'
+                        ? 'Próximo passo é nosso'
+                        : 'Concluído'}
+                  </span>
+                </div>
+                <ol className="flex gap-1 overflow-x-auto pb-1">
+                  {caminho.map((e) => {
+                    const i = indiceEtapa(e.id);
+                    const feito = etapaAtual !== 'cancelado' && i < posAtual;
+                    const atual = e.id === etapaAtual || (etapaAtual === 'ajuste_solicitado' && e.id === 'revisao_fornecedor');
+                    return (
+                      <li key={e.id} className="min-w-[84px] flex-1">
+                        <div className={`h-1.5 rounded-full ${atual ? 'bg-cremesp-600' : feito ? 'bg-cremesp-300' : 'bg-slate-200'}`} />
+                        <p className={`mt-1 text-[10px] leading-tight ${atual ? 'font-semibold text-cremesp-800' : feito ? 'text-slate-600' : 'text-slate-400'}`}>{e.rotulo}</p>
+                      </li>
+                    );
+                  })}
+                </ol>
+                {etapaAtual === 'cancelado' && <p className="rounded-lg bg-slate-100 px-3 py-2 text-sm text-slate-600">Evento cancelado: não abate nem reserva saldo da Ata.</p>}
+              </div>
+            </Card>
+
+            <Card>
+              <CardHeader titulo="Registrar andamento" subtitulo="O fornecedor vê a etapa e as mensagens no portal dele." icone={<Pencil className="h-4 w-4" />} />
+              <div className="grid gap-4 p-5 md:grid-cols-2">
+                <Campo rotulo="Nova etapa">
+                  <select className={inputCls} value={alvo} onChange={(e) => setAlvo(e.target.value as Etapa)}>
+                    {ETAPAS.map((e) => (
+                      <option key={e.id} value={e.id}>
+                        {e.id === etapaAtual ? `${e.rotulo} (atual)` : e.rotulo}
+                      </option>
+                    ))}
+                  </select>
+                </Campo>
+                {alvo === 'protocolado' ? (
+                  <Campo rotulo="Nº do protocolo interno">
+                    <input className={inputCls} value={protocolo} placeholder="Ex.: 12345/2026" onChange={(e) => setProtocolo(e.target.value)} />
+                  </Campo>
+                ) : (
+                  <div className="hidden md:block" />
+                )}
+                <Campo rotulo="Mensagem (opcional para mudança de etapa)" className="md:col-span-2">
+                  <textarea
+                    className={`${inputCls} min-h-[80px]`}
+                    value={mensagem}
+                    placeholder="Ex.: Orçamento enviado para a diretoria, previsão de retorno na sexta."
+                    onChange={(e) => setMensagem(e.target.value)}
+                  />
+                </Campo>
+                <div className="flex flex-wrap gap-2 md:col-span-2">
+                  <Botao variante="primario" icone={<Check className="h-4 w-4" />} onClick={() => registrar(false)} disabled={alvo === etapaAtual}>
+                    {alvo === etapaAtual ? 'Escolha a nova etapa' : infoEtapa(alvo).acao}
+                  </Botao>
+                  <Botao onClick={() => registrar(true)} disabled={!mensagem.trim()}>
+                    Só registrar mensagem
+                  </Botao>
+                </div>
+              </div>
+            </Card>
+
+            <Card>
+              <CardHeader titulo="Histórico" subtitulo="Do mais recente para o mais antigo" icone={<FileText className="h-4 w-4" />} />
+              <div className="p-5">
+                <LinhaDoTempo historico={evento.historico ?? []} />
+              </div>
+            </Card>
+          </div>
+        ) : (
+          <Card className="p-10 text-center text-sm text-slate-500">Escolha um evento na lista.</Card>
+        )}
+      </div>
     </div>
   );
 }
@@ -3296,7 +3815,8 @@ function TelaLogin({ cliente }: { cliente: SupabaseClient }) {
 
   return (
     <TelaCentral>
-      <h1 className="text-base font-semibold text-slate-900">Gestor de Atas</h1>
+      <h1 className="text-base font-semibold text-slate-900">Gestor de Atas · Cremesp</h1>
+      <p className="mt-0.5 text-xs text-slate-500">Equipe do Cremesp e fornecedores entram por aqui.</p>
       <div className="mt-4 grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-sm font-medium">
         {(['entrar', 'criar'] as const).map((m) => (
           <button
@@ -3374,10 +3894,20 @@ function PainelConta({ email, status, sair }: { email: string; status: StatusSyn
 }
 
 function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail: string }) {
-  const [membros, setMembros] = useState<{ email: string; adicionado_por: string | null }[]>([]);
+  const [membros, setMembros] = useState<{ email: string; adicionado_por: string | null; papel?: string | null }[]>([]);
   const [novo, setNovo] = useState('');
+  const [papel, setPapel] = useState<'equipe' | 'fornecedor'>('equipe');
+  const [temPapel, setTemPapel] = useState(true);
   const [msg, setMsg] = useState('');
   const carregar = useCallback(async () => {
+    const r = await cliente.from('membros').select('email, adicionado_por, papel').order('email');
+    if (!r.error) {
+      setTemPapel(true);
+      setMembros(r.data ?? []);
+      return;
+    }
+    // Banco ainda sem a coluna "papel" (script do portal do fornecedor não rodado)
+    setTemPapel(false);
     const { data } = await cliente.from('membros').select('email, adicionado_por').order('email');
     setMembros(data ?? []);
   }, [cliente]);
@@ -3387,8 +3917,22 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
   const adicionar = async () => {
     const e = novo.trim().toLowerCase();
     if (!e.includes('@')) return;
-    const { error } = await cliente.from('membros').insert({ email: e, adicionado_por: meuEmail });
-    setMsg(error ? (error.code === '23505' ? 'Esse e-mail já tem acesso.' : `Erro: ${error.message}`) : `${e} agora tem acesso. Envie o link do sistema: no primeiro acesso a pessoa cria a senha.`);
+    if (papel === 'fornecedor' && !temPapel) {
+      setMsg('Para cadastrar fornecedor, rode antes o script supabase/portal-fornecedor.sql no Supabase (veja o guia).');
+      return;
+    }
+    const linha: Record<string, string> = { email: e, adicionado_por: meuEmail };
+    if (papel === 'fornecedor') linha.papel = papel;
+    const { error } = await cliente.from('membros').insert(linha);
+    setMsg(
+      error
+        ? error.code === '23505'
+          ? 'Esse e-mail já tem acesso.'
+          : `Erro: ${error.message}`
+        : papel === 'fornecedor'
+          ? `${e} agora acessa o Portal do Fornecedor. Use “Copiar convite” na aba Andamento para enviar o link.`
+          : `${e} agora tem acesso. Envie o link do sistema: no primeiro acesso a pessoa cria a senha.`,
+    );
     if (!error) setNovo('');
     void carregar();
   };
@@ -3403,7 +3947,11 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
   };
   return (
     <Card>
-      <CardHeader titulo="Equipe com acesso" subtitulo="Quem pode entrar e editar. Todos veem os mesmos dados em tempo real." icone={<Users className="h-4 w-4" />} />
+      <CardHeader
+        titulo="Quem tem acesso"
+        subtitulo="Equipe edita tudo. Fornecedor só vê os eventos enviados a ele e responde pelo portal."
+        icone={<Users className="h-4 w-4" />}
+      />
       <div className="grid gap-4 p-5 lg:grid-cols-2">
         <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
           {membros.map((m) => (
@@ -3412,35 +3960,335 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
                 {m.email}
                 {m.email === meuEmail && <span className="ml-2 text-xs text-slate-400">(você)</span>}
               </span>
-              {m.email !== meuEmail && (
-                <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => void remover(m.email)} aria-label={`Remover ${m.email}`}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                </button>
-              )}
+              <span className="flex shrink-0 items-center gap-2">
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${
+                    m.papel === 'fornecedor' ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-cremesp-50 text-cremesp-800 ring-cremesp-200'
+                  }`}
+                >
+                  {m.papel === 'fornecedor' ? 'Fornecedor' : 'Equipe'}
+                </span>
+                {m.email !== meuEmail && (
+                  <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => void remover(m.email)} aria-label={`Remover ${m.email}`}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </span>
             </li>
           ))}
           {membros.length === 0 && <li className="px-3 py-2 text-sm text-slate-500">Carregando…</li>}
         </ul>
         <div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <input
               id="novo-membro"
               type="email"
-              className={inputCls}
-              placeholder="email.do.colega@cremesp.org.br"
+              className={`${inputCls} min-w-[200px] flex-1`}
+              placeholder="email@exemplo.com.br"
               value={novo}
               onChange={(e) => setNovo(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void adicionar()}
             />
+            <select className={`${inputCls} w-auto`} value={papel} onChange={(e) => setPapel(e.target.value as 'equipe' | 'fornecedor')} aria-label="Tipo de acesso">
+              <option value="equipe">Equipe Cremesp</option>
+              <option value="fornecedor">Fornecedor</option>
+            </select>
             <Botao variante="primario" icone={<Plus className="h-4 w-4" />} onClick={() => void adicionar()} disabled={!novo.includes('@')}>
               Dar acesso
             </Botao>
           </div>
           {msg && <p className="mt-2 text-sm text-slate-600">{msg}</p>}
-          <p className="mt-3 text-xs text-slate-500">Depois de dar acesso, envie o endereço do sistema para a pessoa. No primeiro acesso ela cria a própria senha.</p>
+          <p className="mt-3 text-xs text-slate-500">
+            Depois de dar acesso, envie o endereço do sistema para a pessoa. No primeiro acesso ela cria a própria senha. O fornecedor entra pelo mesmo link e vê
+            só o Portal do Fornecedor.
+          </p>
+          {!temPapel && (
+            <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
+              O portal do fornecedor ainda não foi ativado no banco. Rode o script <strong>supabase/portal-fornecedor.sql</strong> no Supabase.
+            </p>
+          )}
         </div>
       </div>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------- Portal do fornecedor
+
+type AcaoFornecedor = 'confirmar' | 'ajuste' | 'mensagem';
+
+function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient; email: string; inicial: Base }) {
+  const [base, setBase] = useState<Base>(inicial);
+  const [selId, setSelId] = useState<string>('');
+  const [texto, setTexto] = useState('');
+  const [textoMsg, setTextoMsg] = useState('');
+  const [enviando, setEnviando] = useState(false);
+  const [aviso, setAviso] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
+
+  // Recebe em tempo real o que a equipe do Cremesp altera
+  useEffect(() => {
+    const canal = cliente
+      .channel('registros-fornecedor')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'registros' }, (payload) => {
+        const novo = payload.new as Partial<Registro> | null;
+        const antigo = payload.old as Partial<Registro> | null;
+        const colecao = (novo?.colecao ?? antigo?.colecao) as Colecao | undefined;
+        const id = novo?.id ?? antigo?.id;
+        if (!colecao || !id) return;
+        if (payload.eventType === 'DELETE') setBase((b) => aplicarRegistro(b, colecao, id, null));
+        else setBase((b) => aplicarRegistro(b, colecao, id, { colecao, id, ordem: novo?.ordem ?? 0, dados: novo?.dados }));
+      })
+      .subscribe();
+    return () => {
+      void cliente.removeChannel(canal);
+    };
+  }, [cliente]);
+
+  const { ata, itens, modulos } = base;
+  const eventos = useMemo(() => base.eventos.filter((e) => etapaDe(e) !== 'rascunho'), [base.eventos]);
+  const itensPorId = useMemo(() => new Map(itens.map((i) => [i.id, i])), [itens]);
+  const modulosPorId = useMemo(() => new Map(modulos.map((m) => [m.id, m])), [modulos]);
+  const hoje = hojeISO();
+
+  const grupos = useMemo(() => {
+    const porData = (a: Evento, b: Evento) => a.dataInicio.localeCompare(b.dataInicio);
+    const precisa: Evento[] = [];
+    const andamento: Evento[] = [];
+    const passados: Evento[] = [];
+    for (const ev of eventos) {
+      const info = infoEtapa(etapaDe(ev));
+      if (info.com === 'fornecedor') precisa.push(ev);
+      else if (info.com === 'concluido' || (ev.dataFim || ev.dataInicio) < hoje) passados.push(ev);
+      else andamento.push(ev);
+    }
+    return { precisa: precisa.sort(porData), andamento: andamento.sort(porData), passados: passados.sort(porData).reverse() };
+  }, [eventos, hoje]);
+
+  const evento = eventos.find((e) => e.id === selId) ?? grupos.precisa[0] ?? grupos.andamento[0] ?? grupos.passados[0] ?? null;
+  const etapa = evento ? etapaDe(evento) : 'rascunho';
+
+  useEffect(() => {
+    setTexto('');
+    setTextoMsg('');
+    setAviso(null);
+  }, [evento?.id]);
+
+  const linhas = useMemo(() => {
+    if (!evento) return [];
+    return Object.entries(evento.linhas)
+      .map(([itemId, l]) => ({ it: itensPorId.get(itemId), l }))
+      .filter((x): x is { it: ItemAta; l: LinhaEvento } => !!x.it && consumoLinha(x.l) > 0)
+      .sort((a, b) => (Number(a.it.codigo) || 0) - (Number(b.it.codigo) || 0) || a.it.codigo.localeCompare(b.it.codigo));
+  }, [evento, itensPorId]);
+  const total = linhas.reduce((s, x) => s + consumoLinha(x.l) * x.it.valorUnitario, 0);
+
+  const agir = async (acao: AcaoFornecedor) => {
+    if (!evento) return;
+    const conteudo = (acao === 'mensagem' ? textoMsg : texto).trim();
+    if ((acao === 'ajuste' || acao === 'mensagem') && !conteudo) {
+      setAviso({ tipo: 'erro', texto: acao === 'ajuste' ? 'Descreva o ajuste que precisa ser feito.' : 'Escreva a mensagem.' });
+      return;
+    }
+    setEnviando(true);
+    setAviso(null);
+    const { data, error } = await cliente.rpc('fornecedor_acao', { p_evento: evento.id, p_acao: acao, p_mensagem: conteudo });
+    setEnviando(false);
+    if (error) {
+      setAviso({ tipo: 'erro', texto: `Não foi possível enviar. ${error.message}` });
+      return;
+    }
+    if (data) setBase((b) => ({ ...b, eventos: b.eventos.map((e) => (e.id === evento.id ? (data as Evento) : e)) }));
+    if (acao === 'mensagem') setTextoMsg('');
+    else setTexto('');
+    setAviso({
+      tipo: 'ok',
+      texto: acao === 'confirmar' ? 'Orçamento confirmado. O Cremesp já foi avisado no painel.' : acao === 'ajuste' ? 'Pedido de ajuste enviado ao Cremesp.' : 'Mensagem enviada ao Cremesp.',
+    });
+  };
+
+  const Secao = ({ titulo, lista, vazio }: { titulo: string; lista: Evento[]; vazio: string }) => (
+    <div>
+      <p className="px-4 pb-1 pt-4 text-xs font-semibold uppercase tracking-wide text-slate-500">
+        {titulo} <span className="text-slate-400">({lista.length})</span>
+      </p>
+      <ul className="divide-y divide-slate-100">
+        {lista.map((ev) => (
+          <li key={ev.id}>
+            <button onClick={() => setSelId(ev.id)} className={`block w-full px-4 py-3 text-left transition ${evento?.id === ev.id ? 'bg-cremesp-50' : 'hover:bg-slate-50'}`}>
+              <div className="flex items-center justify-between gap-2 text-xs text-slate-400">
+                <span>OS {ev.numero}</span>
+                <span>{fmtData(ev.dataInicio)}</span>
+              </div>
+              <p className="mt-0.5 truncate text-sm font-medium text-slate-900">{ev.nome}</p>
+              <div className="mt-1.5">
+                <EtapaBadge etapa={etapaDe(ev)} fornecedor />
+              </div>
+            </button>
+          </li>
+        ))}
+        {lista.length === 0 && <li className="px-4 py-2 text-sm text-slate-400">{vazio}</li>}
+      </ul>
+    </div>
+  );
+
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+      <style>{CSS_IMPRESSAO}</style>
+      <header data-print-hide className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-[1300px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
+          <div className="flex items-center gap-3">
+            <img src={iconeCremesp} alt="Cremesp" className="h-9 w-9" />
+            <div>
+              <p className="text-sm font-semibold leading-tight">Portal do Fornecedor · Cremesp</p>
+              <p className="text-xs text-slate-500">
+                {ata.numero} · {ata.fornecedor}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-500">
+            <span className="hidden sm:inline">{email}</span>
+            <Botao tamanho="sm" icone={<LogOut className="h-3.5 w-3.5" />} onClick={() => void cliente.auth.signOut()}>
+              Sair
+            </Botao>
+          </div>
+        </div>
+      </header>
+
+      <main className="mx-auto max-w-[1300px] space-y-5 px-4 py-6 sm:px-6 print:max-w-none print:p-0">
+        <div data-print-hide className="grid gap-3 sm:grid-cols-3">
+          <Kpi titulo="Precisam de vocês" valor={String(grupos.precisa.length)} detalhe="orçamentos para revisar e ordens para executar" icone={<AlertTriangle className="h-4 w-4" />} destaque="bg-amber-50 text-amber-700" />
+          <Kpi titulo="Em andamento" valor={String(grupos.andamento.length)} detalhe="eventos em análise ou aprovados" icone={<CalendarDays className="h-4 w-4" />} />
+          <Kpi titulo="Passados" valor={String(grupos.passados.length)} detalhe="realizados, pagos ou cancelados" icone={<CheckCircle2 className="h-4 w-4" />} />
+        </div>
+
+        {eventos.length === 0 ? (
+          <Card className="p-10 text-center text-sm text-slate-500">Nenhum evento foi enviado pelo Cremesp ainda. Quando houver, ele aparece aqui.</Card>
+        ) : (
+          <div className="grid gap-5 lg:grid-cols-[340px_minmax(0,1fr)]">
+            <Card data-print-hide className="max-h-[75vh] self-start overflow-y-auto pb-2">
+              <Secao titulo="Precisa de vocês" lista={grupos.precisa} vazio="Nada pendente." />
+              <Secao titulo="Em andamento" lista={grupos.andamento} vazio="Nenhum evento." />
+              <Secao titulo="Passados" lista={grupos.passados} vazio="Nenhum evento." />
+            </Card>
+
+            {evento && (
+              <div className="min-w-0 space-y-5">
+                <div className="hidden border-b-2 border-slate-900 pb-3 print:block">
+                  <img src={logoCremesp} alt="Cremesp" className="h-10 w-auto" />
+                  <p className="mt-2 text-sm font-semibold">
+                    Orçamento · OS {evento.numero} · {ata.numero}
+                  </p>
+                </div>
+                <Card>
+                  <CardHeader
+                    titulo={`OS ${evento.numero} · ${evento.nome}`}
+                    subtitulo={`${periodo(evento)}${evento.local ? ` · ${evento.local}` : ''}${evento.responsavel ? ` · Responsável: ${evento.responsavel}` : ''}`}
+                    icone={<CalendarDays className="h-4 w-4" />}
+                    acoes={
+                      <span data-print-hide className="flex items-center gap-2">
+                        <EtapaBadge etapa={etapa} fornecedor />
+                        <Botao tamanho="sm" icone={<Printer className="h-3.5 w-3.5" />} onClick={() => window.print()}>
+                          Imprimir
+                        </Botao>
+                      </span>
+                    }
+                  />
+                  {etapa === 'revisao_fornecedor' && (
+                    <div data-print-hide className="space-y-3 border-b border-amber-100 bg-amber-50 px-5 py-4">
+                      <p className="text-sm font-medium text-amber-900">O Cremesp pede que vocês revisem este orçamento.</p>
+                      <p className="text-sm text-amber-800">Confira itens, quantidades e diárias. Se estiver tudo certo, confirme. Se precisar mudar algo, descreva o ajuste.</p>
+                      <textarea
+                        className={`${inputCls} min-h-[70px]`}
+                        value={texto}
+                        placeholder="Observações ou ajuste necessário (obrigatório para pedir ajuste)"
+                        onChange={(e) => setTexto(e.target.value)}
+                      />
+                      <div className="flex flex-wrap gap-2">
+                        <Botao variante="sucesso" icone={<CheckCircle2 className="h-4 w-4" />} disabled={enviando} onClick={() => void agir('confirmar')}>
+                          Confirmar orçamento
+                        </Botao>
+                        <Botao variante="perigo" icone={<Pencil className="h-4 w-4" />} disabled={enviando} onClick={() => void agir('ajuste')}>
+                          Pedir ajuste
+                        </Botao>
+                      </div>
+                    </div>
+                  )}
+                  {aviso && (
+                    <p data-print-hide className={`border-b border-slate-100 px-5 py-2 text-sm ${aviso.tipo === 'erro' ? 'text-rose-700' : 'text-cremesp-800'}`}>
+                      {aviso.texto}
+                    </p>
+                  )}
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-5 py-2.5">Item</th>
+                          <th className="px-3 py-2.5">Descrição</th>
+                          <th className="px-3 py-2.5 text-right">Qtd.</th>
+                          <th className="px-3 py-2.5 text-right">Diárias</th>
+                          <th className="px-3 py-2.5 text-right">Unitário</th>
+                          <th className="px-5 py-2.5 text-right">Subtotal</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {linhas.map(({ it, l }) => (
+                          <tr key={it.id}>
+                            <td className="px-5 py-2.5 tabular-nums text-slate-500">{it.codigo}</td>
+                            <td className="px-3 py-2.5">
+                              <p className="text-slate-800">{it.descricao}</p>
+                              <p className="text-xs text-slate-400">
+                                {modulosPorId.get(it.moduloId)?.nome ?? ''} · {it.unidade}
+                              </p>
+                            </td>
+                            <td className="px-3 py-2.5 text-right tabular-nums">{num(l.qtd)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums">{num(l.diarias)}</td>
+                            <td className="px-3 py-2.5 text-right tabular-nums">{brl(it.valorUnitario)}</td>
+                            <td className="px-5 py-2.5 text-right font-medium tabular-nums">{brl(consumoLinha(l) * it.valorUnitario)}</td>
+                          </tr>
+                        ))}
+                        {linhas.length === 0 && (
+                          <tr>
+                            <td colSpan={6} className="px-5 py-6 text-center text-slate-500">
+                              Sem itens.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                      <tfoot>
+                        <tr className="border-t-2 border-slate-200">
+                          <td colSpan={5} className="px-5 py-3 text-right font-semibold">
+                            Total
+                          </td>
+                          <td className="px-5 py-3 text-right text-base font-semibold tabular-nums">{brl(total)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </Card>
+
+                <div className="grid gap-5 xl:grid-cols-2">
+                  <Card>
+                    <CardHeader titulo="Andamento" subtitulo="Cada etapa registrada pelo Cremesp e por vocês" icone={<ListChecks className="h-4 w-4" />} />
+                    <div className="p-5">
+                      <LinhaDoTempo historico={evento.historico ?? []} fornecedor />
+                    </div>
+                  </Card>
+                  <Card data-print-hide>
+                    <CardHeader titulo="Mensagem para o Cremesp" subtitulo="Ex.: número da nota fiscal, dúvida sobre montagem, contato da equipe" icone={<Pencil className="h-4 w-4" />} />
+                    <div className="space-y-3 p-5">
+                      <textarea className={`${inputCls} min-h-[90px]`} value={textoMsg} onChange={(e) => setTextoMsg(e.target.value)} placeholder="Escreva aqui" />
+                      <Botao variante="primario" disabled={enviando || !textoMsg.trim()} onClick={() => void agir('mensagem')}>
+                        {enviando ? 'Enviando…' : 'Enviar mensagem'}
+                      </Botao>
+                    </div>
+                  </Card>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </main>
+    </div>
   );
 }
 
@@ -3455,6 +4303,7 @@ function AppCompartilhado({ cliente, sessao, inicial, sincronizadoInicial }: { c
       compartilhado
       painelConta={<PainelConta email={email} status={status} sair={() => void cliente.auth.signOut()} />}
       painelEquipe={<PainelEquipe cliente={cliente} meuEmail={email.toLowerCase()} />}
+      usuario={email}
     />
   );
 }
@@ -3465,7 +4314,7 @@ function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
     | { tipo: 'carregando' }
     | { tipo: 'sem-acesso' }
     | { tipo: 'erro'; msg: string }
-    | { tipo: 'pronto'; base: Base; sinc: Map<string, string> }
+    | { tipo: 'pronto'; base: Base; sinc: Map<string, string>; papel: 'equipe' | 'fornecedor' }
   >({ tipo: 'carregando' });
 
   useEffect(() => {
@@ -3480,9 +4329,17 @@ function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
     let ativo = true;
     setCarga({ tipo: 'carregando' });
     (async () => {
-      const { data: membro, error: e1 } = await cliente.rpc('eh_membro');
-      if (e1) throw e1;
-      if (!membro) {
+      // Papel de quem entrou: equipe do Cremesp ou fornecedor
+      let papel: 'equipe' | 'fornecedor' | null = null;
+      const r = await cliente.rpc('meu_papel');
+      if (!r.error) papel = r.data === 'fornecedor' ? 'fornecedor' : r.data === 'equipe' ? 'equipe' : null;
+      else {
+        // Banco ainda sem o script do portal do fornecedor: todo membro é equipe
+        const { data: membro, error: e1 } = await cliente.rpc('eh_membro');
+        if (e1) throw e1;
+        papel = membro ? 'equipe' : null;
+      }
+      if (!papel) {
         if (ativo) setCarga({ tipo: 'sem-acesso' });
         return;
       }
@@ -3494,7 +4351,7 @@ function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
         lista = lista.concat((data ?? []) as Registro[]);
         if (!data || data.length < 1000) break;
       }
-      if (lista.length === 0) {
+      if (lista.length === 0 && papel === 'equipe') {
         // Primeiro acesso do setor: grava a Ata original no banco
         lista = [...baseParaRegistros(criarBaseExemplo()).values()];
         const { error: e2 } = await cliente.from('registros').upsert(lista.map((r) => ({ colecao: r.colecao, id: r.id, ordem: r.ordem, dados: r.dados })));
@@ -3503,7 +4360,7 @@ function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
       const base = registrosParaBase(lista);
       const sinc = new Map<string, string>();
       for (const r of lista) sinc.set(chaveRegistro(r.colecao, r.id), assinatura(r));
-      if (ativo) setCarga({ tipo: 'pronto', base, sinc });
+      if (ativo) setCarga({ tipo: 'pronto', base, sinc, papel });
     })().catch((err: { message?: string }) => ativo && setCarga({ tipo: 'erro', msg: err?.message ?? String(err) }));
     return () => {
       ativo = false;
@@ -3520,6 +4377,7 @@ function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
     );
   }
   if (!sessao) return <TelaLogin cliente={cliente} />;
+  if (carga.tipo === 'pronto' && carga.papel === 'fornecedor') return <PortalFornecedor cliente={cliente} email={sessao.user.email ?? ''} inicial={carga.base} />;
   if (carga.tipo === 'pronto') return <AppCompartilhado cliente={cliente} sessao={sessao} inicial={carga.base} sincronizadoInicial={carga.sinc} />;
   return (
     <TelaCentral>
@@ -3532,7 +4390,7 @@ function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
         <>
           <h1 className="text-base font-semibold text-slate-900">Acesso não liberado</h1>
           <p className="mt-2 text-sm text-slate-600">
-            O e-mail <strong>{sessao.user.email}</strong> ainda não está na equipe. Peça a quem já usa o sistema para adicioná-lo em Configuração da Ata › Equipe com acesso.
+            O e-mail <strong>{sessao.user.email}</strong> ainda não foi autorizado. Peça ao Cremesp para cadastrá-lo em Configuração da Ata › Quem tem acesso.
           </p>
         </>
       )}

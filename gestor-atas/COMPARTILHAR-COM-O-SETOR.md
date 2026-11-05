@@ -55,6 +55,19 @@ Quem não estiver na lista de membros não vê nada, mesmo criando senha.
 3. Em **Configuração da Ata › Equipe com acesso**, adicione o e-mail de cada colega e mande o endereço do site.
    Cada um faz o **Primeiro acesso** com o próprio e-mail.
 
+## Ativar o Portal do Fornecedor
+
+Faça isto uma vez, depois que o sistema já estiver no ar:
+
+1. No Supabase, abra **SQL Editor › New query**.
+2. Cole todo o conteúdo do arquivo `gestor-atas/supabase/portal-fornecedor.sql` e clique em **Run**. Deve aparecer "Success".
+3. No sistema, vá em **Configuração da Ata › Quem tem acesso**, digite o e-mail do fornecedor, escolha **Fornecedor** e clique em **Dar acesso**.
+4. Na aba **Andamento**, clique em **Copiar convite para o fornecedor** e mande pelo WhatsApp ou e-mail.
+5. O fornecedor abre o mesmo link, clica em **Primeiro acesso** e cria a senha. Ele vê só o Portal do Fornecedor.
+
+O que o fornecedor pode fazer: ver os eventos que vocês enviaram (rascunhos ficam ocultos), conferir itens e valores,
+**confirmar o orçamento**, **pedir ajuste** e **mandar mensagens**. Ele não consegue alterar itens, quantidades nem etapas.
+
 ## Dúvidas comuns
 
 - **“Acesso não liberado”:** o e-mail ainda não está na equipe. Alguém que já usa o sistema precisa adicioná-lo.
