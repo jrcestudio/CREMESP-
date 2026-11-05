@@ -26,6 +26,17 @@ Os demais arquivos (`main.tsx`, `index.css`, configs) só montam o projeto.
 - Sem Supabase configurado, os dados ficam salvos no navegador (`localStorage`). Use *Exportar backup* na Configuração
   para guardar uma cópia ou levar para outro computador.
 
+## Andamento e Portal do Fornecedor
+
+- Cada evento passa por etapas: rascunho interno → com o fornecedor para revisar → revisado pelo fornecedor (ou ajuste
+  solicitado) → aguardando diretoria → aprovado → protocolado → ordem de serviço enviada → realizado → nota fiscal recebida
+  → nota enviada para pagamento → pago (ou cancelado).
+- Na aba **Andamento** a equipe avança a etapa, registra mensagens e vê o histórico completo, com data e autor.
+- Aprovar pela aba Andamento faz a mesma checagem de saldo do Simulador. Evento cancelado não abate nem reserva saldo.
+- O fornecedor entra pelo mesmo link com login próprio e vê o **Portal do Fornecedor**: eventos que precisam dele,
+  em andamento e passados, com itens, valores e histórico. Ele confirma o orçamento, pede ajuste ou manda mensagem.
+- Para ativar no banco, rode `supabase/portal-fornecedor.sql` (passo a passo em COMPARTILHAR-COM-O-SETOR.md).
+
 ## Relatórios
 
 - A aba **Relatórios** agrupa os eventos por **mês, trimestre ou semestre** (pela data de início do evento).
