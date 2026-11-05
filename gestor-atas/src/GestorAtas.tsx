@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
-import type { Dispatch, ReactNode, SetStateAction } from 'react';
+import type { Dispatch, HTMLAttributes, ReactNode, SetStateAction } from 'react';
 import logoCremesp from './assets/logo-cremesp.png';
 import iconeCremesp from './assets/icone-cremesp.png';
 import {
@@ -126,7 +126,7 @@ interface Base {
   eventos: Evento[];
 }
 
-type Aba = 'dashboard' | 'simulador' | 'ordem' | 'config';
+type Aba = 'dashboard' | 'simulador' | 'ordem' | 'relatorios' | 'config';
 
 // ---------------------------------------------------------------- Cores
 
@@ -529,8 +529,12 @@ function totalEvento(ev: Evento, itensPorId: Map<string, ItemAta>): number {
 
 // ---------------------------------------------------------------- Componentes de interface
 
-function Card({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}>{children}</div>;
+function Card({ children, className = '', ...resto }: { children: ReactNode; className?: string } & HTMLAttributes<HTMLDivElement> & { 'data-print-hide'?: boolean }) {
+  return (
+    <div {...resto} className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}>
+      {children}
+    </div>
+  );
 }
 
 function CardHeader({ titulo, subtitulo, icone, acoes }: { titulo: string; subtitulo?: string; icone?: ReactNode; acoes?: ReactNode }) {
@@ -843,6 +847,7 @@ function AppGestor({
     { id: 'dashboard', rotulo: 'Dashboard & Saldos', curto: 'Saldos', icone: <LayoutDashboard className="h-4 w-4" /> },
     { id: 'simulador', rotulo: 'Simulador de Evento', curto: 'Simulador', icone: <Layers className="h-4 w-4" /> },
     { id: 'ordem', rotulo: 'Ordem de Orçamento', curto: 'Ordem', icone: <FileText className="h-4 w-4" /> },
+    { id: 'relatorios', rotulo: 'Relatórios', curto: 'Relatórios', icone: <BarChart3 className="h-4 w-4" /> },
     { id: 'config', rotulo: 'Configuração da Ata', curto: 'Config.', icone: <Settings className="h-4 w-4" /> },
   ];
 
@@ -911,7 +916,7 @@ function AppGestor({
           </div>
         </div>
         {painelConta && <div className="px-4 pb-2">{painelConta}</div>}
-        <nav className="grid grid-cols-4 border-t border-slate-100">
+        <nav className="grid grid-cols-5 border-t border-slate-100">
           {ABAS.map((a) => (
             <button
               key={a.id}
@@ -975,6 +980,16 @@ function AppGestor({
               atualizar={atualizarEvento}
               avisar={avisar}
               irParaSimulador={() => setAba('simulador')}
+            />
+          )}
+          {aba === 'relatorios' && (
+            <RelatoriosAba
+              ata={ata}
+              eventos={eventos}
+              modulos={modulos}
+              itensPorId={itensPorId}
+              financeiro={financeiro}
+              irParaEvento={irParaEvento}
             />
           )}
           {aba === 'config' && (
@@ -2177,6 +2192,434 @@ function OrdemAba({
           </section>
         </article>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Aba: Relatórios
+
+type Granularidade = 'mes' | 'trimestre' | 'semestre';
+const MESES_CURTOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const SEM_DATA = 'sem-data';
+
+function chavePeriodo(iso: string, g: Granularidade): string {
+  if (!iso) return SEM_DATA;
+  const ano = iso.slice(0, 4);
+  const mes = Number(iso.slice(5, 7));
+  if (g === 'mes') return `${ano}-${String(mes).padStart(2, '0')}`;
+  if (g === 'trimestre') return `${ano}-T${Math.ceil(mes / 3)}`;
+  return `${ano}-S${mes <= 6 ? 1 : 2}`;
+}
+
+function rotuloPeriodo(chave: string, g: Granularidade): string {
+  if (chave === SEM_DATA) return 'Sem data';
+  const ano = chave.slice(0, 4);
+  if (g === 'mes') return `${MESES_CURTOS[Number(chave.slice(5, 7)) - 1]}/${ano}`;
+  if (g === 'trimestre') return `${chave.slice(6)}º trimestre ${ano}`;
+  return `${chave.slice(6)}º semestre ${ano}`;
+}
+
+interface LinhaRelatorio {
+  ev: Evento;
+  total: number;
+  diarias: number;
+  porModulo: Map<string, number>;
+  itens: { it: ItemAta; l: LinhaEvento; subtotal: number }[];
+}
+
+function RelatoriosAba({
+  ata,
+  eventos,
+  modulos,
+  itensPorId,
+  financeiro,
+  irParaEvento,
+}: {
+  ata: AtaInfo;
+  eventos: Evento[];
+  modulos: Modulo[];
+  itensPorId: Map<string, ItemAta>;
+  financeiro: Financeiro;
+  irParaEvento: (id: string, destino: Aba) => void;
+}) {
+  const [gran, setGran] = useState<Granularidade>('mes');
+  const [incluirSim, setIncluirSim] = useState(false);
+  const [sel, setSel] = useState<string>('todos');
+
+  const linhas: LinhaRelatorio[] = useMemo(
+    () =>
+      eventos
+        .filter((ev) => ev.status === 'aprovado' || incluirSim)
+        .map((ev) => {
+          const itens: LinhaRelatorio['itens'] = [];
+          const porModulo = new Map<string, number>();
+          let total = 0;
+          let diarias = 0;
+          for (const [itemId, l] of Object.entries(ev.linhas)) {
+            const it = itensPorId.get(itemId);
+            const c = consumoLinha(l);
+            if (!it || c <= 0) continue;
+            const subtotal = c * it.valorUnitario;
+            total += subtotal;
+            diarias += c;
+            porModulo.set(it.moduloId, (porModulo.get(it.moduloId) ?? 0) + subtotal);
+            itens.push({ it, l, subtotal });
+          }
+          return { ev, total, diarias, porModulo, itens };
+        })
+        .sort((a, b) => (a.ev.dataInicio || '9999').localeCompare(b.ev.dataInicio || '9999')),
+    [eventos, itensPorId, incluirSim],
+  );
+
+  // Lista de períodos: toda a vigência da Ata, mais qualquer período com eventos fora dela
+  const periodos = useMemo(() => {
+    const chaves = new Set<string>();
+    const ini = ata.vigenciaInicio;
+    const fim = ata.vigenciaFim;
+    if (ini && fim && ini <= fim) {
+      let a = Number(ini.slice(0, 4));
+      let m = Number(ini.slice(5, 7));
+      const aF = Number(fim.slice(0, 4));
+      const mF = Number(fim.slice(5, 7));
+      while (a < aF || (a === aF && m <= mF)) {
+        chaves.add(chavePeriodo(`${a}-${String(m).padStart(2, '0')}-01`, gran));
+        m++;
+        if (m > 12) {
+          m = 1;
+          a++;
+        }
+      }
+    }
+    for (const l of linhas) chaves.add(chavePeriodo(l.ev.dataInicio, gran));
+    return [...chaves].sort((x, y) => (x === SEM_DATA ? 1 : y === SEM_DATA ? -1 : x.localeCompare(y)));
+  }, [ata.vigenciaInicio, ata.vigenciaFim, linhas, gran]);
+
+  const serie = useMemo(() => {
+    let acumulado = 0;
+    return periodos.map((k) => {
+      const doPeriodo = linhas.filter((l) => chavePeriodo(l.ev.dataInicio, gran) === k);
+      const executado = doPeriodo.filter((l) => l.ev.status === 'aprovado').reduce((s, l) => s + l.total, 0);
+      const simulado = doPeriodo.filter((l) => l.ev.status === 'simulacao').reduce((s, l) => s + l.total, 0);
+      acumulado += executado;
+      return { k, n: doPeriodo.length, executado, simulado, acumulado, diarias: doPeriodo.reduce((s, l) => s + l.diarias, 0) };
+    });
+  }, [periodos, linhas, gran]);
+
+  const maxPeriodo = Math.max(1, ...serie.map((p) => p.executado + p.simulado));
+  const selValida = sel === 'todos' || periodos.includes(sel) ? sel : 'todos';
+  const doRecorte = selValida === 'todos' ? linhas : linhas.filter((l) => chavePeriodo(l.ev.dataInicio, gran) === selValida);
+  const rotuloRecorte = selValida === 'todos' ? 'Toda a vigência' : rotuloPeriodo(selValida, gran);
+
+  const totalRecorte = doRecorte.reduce((s, l) => s + l.total, 0);
+  const executadoRecorte = doRecorte.filter((l) => l.ev.status === 'aprovado').reduce((s, l) => s + l.total, 0);
+  const diariasRecorte = doRecorte.reduce((s, l) => s + l.diarias, 0);
+  const semProtocolo = doRecorte.filter((l) => !l.ev.protocolo?.trim()).length;
+
+  const porModulo = modulos
+    .map((m) => ({ m, valor: doRecorte.reduce((s, l) => s + (l.porModulo.get(m.id) ?? 0), 0) }))
+    .filter((x) => x.valor > 0)
+    .sort((a, b) => b.valor - a.valor);
+
+  const topItens = (() => {
+    const mapa = new Map<string, { it: ItemAta; qtd: number; valor: number }>();
+    for (const l of doRecorte)
+      for (const { it, l: li, subtotal } of l.itens) {
+        const x = mapa.get(it.id) ?? { it, qtd: 0, valor: 0 };
+        x.qtd += consumoLinha(li);
+        x.valor += subtotal;
+        mapa.set(it.id, x);
+      }
+    return [...mapa.values()].sort((a, b) => b.valor - a.valor).slice(0, 10);
+  })();
+
+  const exportarCSV = () => {
+    const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const dec = (v: number) => v.toFixed(2).replace('.', ',');
+    const nomesModulo = new Map(modulos.map((m) => [m.id, m.nome]));
+    const cab = ['Período', 'OS', 'Protocolo Cremesp', 'Evento', 'Início', 'Término', 'Local', 'Status', 'Módulo', 'Item', 'Descrição', 'Unidade', 'Qtd.', 'Diárias', 'Valor unitário', 'Subtotal'];
+    const rows = [cab.map(esc).join(';')];
+    for (const l of doRecorte)
+      for (const { it, l: li, subtotal } of l.itens)
+        rows.push(
+          [
+            esc(rotuloPeriodo(chavePeriodo(l.ev.dataInicio, gran), gran)),
+            esc(l.ev.numero),
+            esc(l.ev.protocolo ?? ''),
+            esc(l.ev.nome),
+            esc(fmtData(l.ev.dataInicio)),
+            esc(fmtData(l.ev.dataFim || l.ev.dataInicio)),
+            esc(l.ev.local),
+            esc(l.ev.status === 'aprovado' ? 'Aprovado' : 'Em simulação'),
+            esc(nomesModulo.get(it.moduloId) ?? ''),
+            esc(it.codigo),
+            esc(it.descricao),
+            esc(it.unidade),
+            dec(li.qtd),
+            dec(li.diarias),
+            dec(it.valorUnitario),
+            dec(subtotal),
+          ].join(';'),
+        );
+    const blob = new Blob(['﻿' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `relatorio-ata-${rotuloRecorte.toLowerCase().replace(/[^\wà-ú]+/gi, '-')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const GRANS: { id: Granularidade; rotulo: string }[] = [
+    { id: 'mes', rotulo: 'Mês' },
+    { id: 'trimestre', rotulo: 'Trimestre' },
+    { id: 'semestre', rotulo: 'Semestre' },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div data-print-hide className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">Relatórios</h1>
+          <p className="mt-1 text-sm text-slate-500">Execução da Ata por período. Cada evento conta no período da sua data de início.</p>
+        </div>
+        <div data-print-hide className="flex flex-wrap gap-2">
+          <Botao icone={<Download className="h-4 w-4" />} onClick={exportarCSV} disabled={doRecorte.length === 0}>
+            Exportar planilha (CSV)
+          </Botao>
+          <Botao variante="primario" icone={<Printer className="h-4 w-4" />} onClick={() => window.print()}>
+            Imprimir / Salvar PDF
+          </Botao>
+        </div>
+      </div>
+
+      {/* Cabeçalho que só aparece na impressão */}
+      <div className="hidden border-b-2 border-slate-900 pb-3 print:block">
+        <img src={logoCremesp} alt="Cremesp" className="h-10 w-auto" />
+        <p className="mt-2 text-sm font-semibold">
+          Relatório de execução · {ata.numero} · {rotuloRecorte}
+        </p>
+        <p className="text-xs text-slate-600">
+          {ata.fornecedor} · {incluirSim ? 'Inclui eventos em simulação' : 'Somente eventos aprovados'} · Emitido em {fmtData(hojeISO())}
+        </p>
+      </div>
+
+      <Card data-print-hide className="flex flex-wrap items-center gap-4 p-4">
+        <div className="inline-flex rounded-lg bg-slate-100 p-1 text-sm font-medium">
+          {GRANS.map((g) => (
+            <button
+              key={g.id}
+              onClick={() => {
+                setGran(g.id);
+                setSel('todos');
+              }}
+              className={`rounded-md px-3 py-1.5 ${gran === g.id ? 'bg-white text-cremesp-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+            >
+              {g.rotulo}
+            </button>
+          ))}
+        </div>
+        <select className={`${inputCls} w-auto`} value={selValida} onChange={(e) => setSel(e.target.value)} aria-label="Período">
+          <option value="todos">Toda a vigência</option>
+          {periodos.map((k) => (
+            <option key={k} value={k}>
+              {rotuloPeriodo(k, gran)}
+            </option>
+          ))}
+        </select>
+        <label className="flex items-center gap-2 text-sm text-slate-600">
+          <input type="checkbox" className="h-4 w-4 rounded border-slate-300 text-cremesp-600" checked={incluirSim} onChange={(e) => setIncluirSim(e.target.checked)} />
+          Incluir eventos em simulação
+        </label>
+      </Card>
+
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Kpi
+          titulo={incluirSim ? 'Valor no recorte' : 'Valor executado'}
+          valor={brl(incluirSim ? totalRecorte : executadoRecorte)}
+          detalhe={`${rotuloRecorte}${incluirSim ? ` · aprovado ${brl(executadoRecorte)}` : ''}`}
+          icone={<Wallet className="h-4 w-4" />}
+          destaque="bg-cremesp-50 text-cremesp-700"
+        />
+        <Kpi
+          titulo="Eventos"
+          valor={String(doRecorte.length)}
+          detalhe={
+            semProtocolo > 0 ? <span className="text-amber-700">{semProtocolo} sem protocolo</span> : doRecorte.length ? 'todos com protocolo' : 'nenhum evento no período'
+          }
+          icone={<CalendarDays className="h-4 w-4" />}
+        />
+        <Kpi titulo="Diárias contratadas" valor={num(diariasRecorte)} detalhe="quantidade × diárias, somando todos os itens" icone={<Package className="h-4 w-4" />} />
+        <Kpi
+          titulo="Participação na Ata"
+          valor={pct(financeiro.total ? ((incluirSim ? totalRecorte : executadoRecorte) / financeiro.total) * 100 : 0, 2)}
+          detalhe={`do valor total de ${brl(financeiro.total)}`}
+          icone={<BarChart3 className="h-4 w-4" />}
+        />
+      </div>
+
+      <Card>
+        <CardHeader
+          titulo={`Evolução por ${gran === 'mes' ? 'mês' : gran}`}
+          subtitulo="O acumulado considera só eventos aprovados. Clique numa linha para ver o detalhe do período."
+          icone={<BarChart3 className="h-4 w-4" />}
+        />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[760px] text-sm">
+            <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-5 py-2.5">Período</th>
+                <th className="px-3 py-2.5 text-right">Eventos</th>
+                <th className="px-3 py-2.5 text-right">Executado</th>
+                {incluirSim && <th className="px-3 py-2.5 text-right">Em simulação</th>}
+                <th className="w-56 px-3 py-2.5" />
+                <th className="px-3 py-2.5 text-right">Acumulado</th>
+                <th className="px-5 py-2.5 text-right">Saldo da Ata</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {serie.map((p) => {
+                const ativo = selValida === p.k;
+                return (
+                  <tr
+                    key={p.k}
+                    onClick={() => setSel(ativo ? 'todos' : p.k)}
+                    className={`cursor-pointer ${ativo ? 'bg-cremesp-50' : 'hover:bg-slate-50'} ${p.n === 0 ? 'text-slate-400' : ''}`}
+                  >
+                    <td className={`px-5 py-2.5 font-medium ${p.n ? 'text-slate-800' : ''}`}>{rotuloPeriodo(p.k, gran)}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{p.n || '—'}</td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{p.executado ? brl(p.executado) : '—'}</td>
+                    {incluirSim && <td className="px-3 py-2.5 text-right tabular-nums text-cremesp-700">{p.simulado ? brl(p.simulado) : '—'}</td>}
+                    <td className="px-3 py-2.5">
+                      <div className="flex h-2 w-full overflow-hidden rounded-full bg-slate-100">
+                        <div className="h-full bg-cremesp-600" style={{ width: `${(p.executado / maxPeriodo) * 100}%` }} />
+                        <div className="h-full bg-cremesp-300" style={{ width: `${(p.simulado / maxPeriodo) * 100}%` }} />
+                      </div>
+                    </td>
+                    <td className="px-3 py-2.5 text-right tabular-nums">{brl(p.acumulado)}</td>
+                    <td className="px-5 py-2.5 text-right tabular-nums">{brl(financeiro.total - p.acumulado)}</td>
+                  </tr>
+                );
+              })}
+              {serie.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-10 text-center text-slate-500">
+                    Informe a vigência da Ata na Configuração para montar os períodos.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Card>
+          <CardHeader titulo={`Por módulo · ${rotuloRecorte}`} icone={<Layers className="h-4 w-4" />} />
+          <div className="divide-y divide-slate-100">
+            {porModulo.map(({ m, valor }) => (
+              <div key={m.id} className="px-5 py-3">
+                <div className="mb-1.5 flex items-center justify-between gap-2 text-sm">
+                  <span className="flex items-center gap-2">
+                    <span className={`h-2.5 w-2.5 rounded-full ${CORES[m.cor].dot}`} />
+                    <span className="font-medium text-slate-800">{m.nome}</span>
+                  </span>
+                  <span className="tabular-nums text-slate-700">
+                    {brl(valor)} <span className="ml-1 text-xs text-slate-400">{pct(totalRecorte ? (valor / totalRecorte) * 100 : 0)}</span>
+                  </span>
+                </div>
+                <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+                  <div className={`h-full ${CORES[m.cor].bar}`} style={{ width: `${totalRecorte ? (valor / totalRecorte) * 100 : 0}%` }} />
+                </div>
+              </div>
+            ))}
+            {porModulo.length === 0 && <p className="px-5 py-8 text-center text-sm text-slate-500">Nenhum valor neste recorte.</p>}
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader titulo={`Itens mais usados · ${rotuloRecorte}`} subtitulo="Os 10 itens de maior valor" icone={<Package className="h-4 w-4" />} />
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-5 py-2">Item</th>
+                  <th className="px-3 py-2 text-right">Qtd. (diárias)</th>
+                  <th className="px-5 py-2 text-right">Valor</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {topItens.map(({ it, qtd, valor }) => (
+                  <tr key={it.id}>
+                    <td className="px-5 py-2">
+                      <span className="mr-2 rounded bg-slate-100 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-slate-600">{it.codigo}</span>
+                      <span className="text-slate-800">{it.descricao.length > 70 ? `${it.descricao.slice(0, 70)}…` : it.descricao}</span>
+                    </td>
+                    <td className="px-3 py-2 text-right tabular-nums">{num(qtd)}</td>
+                    <td className="px-5 py-2 text-right font-medium tabular-nums">{brl(valor)}</td>
+                  </tr>
+                ))}
+                {topItens.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-5 py-8 text-center text-slate-500">
+                      Nenhum item neste recorte.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Card>
+      </div>
+
+      <Card>
+        <CardHeader titulo={`Eventos · ${rotuloRecorte}`} subtitulo={`${doRecorte.length} evento(s) · ${brl(totalRecorte)}`} icone={<CalendarDays className="h-4 w-4" />} />
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] text-sm">
+            <thead className="bg-slate-50 text-left text-xs font-medium uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-5 py-2.5">OS</th>
+                <th className="px-3 py-2.5">Protocolo</th>
+                <th className="px-3 py-2.5">Evento</th>
+                <th className="px-3 py-2.5">Data</th>
+                <th className="px-3 py-2.5">Status</th>
+                <th className="px-3 py-2.5 text-right">Valor</th>
+                <th data-print-hide className="px-5 py-2.5" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {doRecorte.map(({ ev, total }) => (
+                <tr key={ev.id} className="hover:bg-slate-50/60">
+                  <td className="px-5 py-2.5 tabular-nums text-slate-600">{ev.numero}</td>
+                  <td className="px-3 py-2.5 tabular-nums">{ev.protocolo?.trim() || <span className="text-amber-700">pendente</span>}</td>
+                  <td className="px-3 py-2.5 font-medium text-slate-800">{ev.nome}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-slate-600">{periodo(ev)}</td>
+                  <td className="px-3 py-2.5">
+                    <StatusBadge status={ev.status} />
+                  </td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-medium tabular-nums">{brl(total)}</td>
+                  <td data-print-hide className="whitespace-nowrap px-5 py-2.5 text-right">
+                    <Botao tamanho="sm" variante="fantasma" onClick={() => irParaEvento(ev.id, 'simulador')}>
+                      Abrir
+                    </Botao>
+                    <Botao tamanho="sm" variante="fantasma" onClick={() => irParaEvento(ev.id, 'ordem')}>
+                      OS
+                    </Botao>
+                  </td>
+                </tr>
+              ))}
+              {doRecorte.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-5 py-10 text-center text-slate-500">
+                    Nenhum evento {incluirSim ? '' : 'aprovado '}neste período.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Card>
     </div>
   );
 }

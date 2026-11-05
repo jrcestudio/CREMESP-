@@ -26,6 +26,14 @@ Os demais arquivos (`main.tsx`, `index.css`, configs) só montam o projeto.
 - Sem Supabase configurado, os dados ficam salvos no navegador (`localStorage`). Use *Exportar backup* na Configuração
   para guardar uma cópia ou levar para outro computador.
 
+## Relatórios
+
+- A aba **Relatórios** agrupa os eventos por **mês, trimestre ou semestre** (pela data de início do evento).
+- Por padrão conta só eventos **aprovados**; marque *Incluir eventos em simulação* para ver também o que está reservado.
+- Mostra a evolução período a período (executado, acumulado e saldo da Ata), o total por módulo, os itens mais usados
+  e a lista de eventos com protocolo. Clique num período para detalhar.
+- *Imprimir / Salvar PDF* gera o relatório com o logo do Cremesp; *Exportar planilha (CSV)* abre no Excel, uma linha por item de evento.
+
 ## Uso compartilhado pelo setor
 
 Com as variáveis `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` definidas, o sistema pede login (e-mail e senha),
