@@ -1,0 +1,68 @@
+{
+  "ata": {
+    "numero": "ARP nº 0042/2026",
+    "pregao": "Pregão Eletrônico nº 77/2026",
+    "processo": "Processo nº 1234/2026",
+    "objeto": "Registro de preços para serviços de buffet e coffee break em eventos do Cremesp.",
+    "fornecedor": "SABOR EVENTOS LTDA",
+    "cnpj": "12.345.678/0001-90",
+    "enderecoFornecedor": "Rua A, 10, São Paulo/SP",
+    "contato": "Maria Souza",
+    "telefone": "(11) 5555-0000",
+    "email": "contato@sabor.com.br",
+    "vigenciaInicio": "2026-03-01",
+    "vigenciaFim": "2027-02-28",
+    "gestor": "Fulano",
+    "fiscal": "Beltrano",
+    "contratante": "",
+    "cnpjContratante": "",
+    "enderecoContratante": "",
+    "uasg": "",
+    "cidade": ""
+  },
+  "modulos": [
+    "Coffee break",
+    "Almoço"
+  ],
+  "itens": [
+    {
+      "codigo": "1",
+      "descricao": "Coffee break simples (café, água, sucos, 3 tipos de salgados)",
+      "modulo": "Coffee break",
+      "unidade": "Unidade",
+      "unidadeOriginal": "pessoa",
+      "qtdContratada": 5000,
+      "valorUnitario": 18.9
+    },
+    {
+      "codigo": "2",
+      "descricao": "Coffee break completo",
+      "modulo": "Coffee break",
+      "unidade": "Unidade",
+      "unidadeOriginal": "pessoa",
+      "qtdContratada": 3000,
+      "valorUnitario": 32.5
+    },
+    {
+      "codigo": "3",
+      "descricao": "Almoço executivo",
+      "modulo": "Almoço",
+      "unidade": "Unidade",
+      "unidadeOriginal": "pessoa",
+      "qtdContratada": 0,
+      "valorUnitario": 75
+    },
+    {
+      "codigo": "4",
+      "descricao": "Garçom",
+      "modulo": "Equipe",
+      "unidade": "Diária 8h",
+      "unidadeOriginal": "diária 8h",
+      "qtdContratada": 200,
+      "valorUnitario": 280
+    }
+  ],
+  "avisos": [
+    "O item 3 não informa a quantidade registrada."
+  ]
+}

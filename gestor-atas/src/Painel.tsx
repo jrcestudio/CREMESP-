@@ -1,14 +1,14 @@
 /* ============================================================================
  * Painel de Atas – Cremesp
- * Sistema separado do Gestor de Atas da REDXCORP: o setor anexa uma Ata de
- * Registro de Preços, a IA (função /api/ler-ata na Vercel) extrai os dados, a
+ * Sistema separado do Gestor de Atas da REDXCORP: o setor anexa o PDF de uma
+ * Ata de Registro de Preços e importa o arquivo de dados dela (.json), a
  * equipe confere e cada ata vira um sistema completo (saldos, simulador, ordem,
  * eventos, relatórios e portal do fornecedor), com dados nas tabelas painel_*.
  * ========================================================================== */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
-import { AlertTriangle, ArrowRight, CalendarDays, FileText, Loader2, LogOut, Plus, Search, Sparkles, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CalendarDays, FileText, Loader2, LogOut, Plus, Search, Trash2, Upload, X } from 'lucide-react';
 import iconeCremesp from './assets/icone-cremesp.png';
 import {
   AppCompartilhado,
@@ -37,6 +37,7 @@ import {
   hojeISO,
   inputCls,
   linhaBanco,
+  normalizarBase,
   registrosParaBase,
   supabase,
 } from './GestorAtas';
@@ -59,7 +60,7 @@ interface Acesso {
   atas: string[];
 }
 
-/** O que a IA devolve (formato definido em api/ler-ata.ts) */
+/** Formato do arquivo de dados da ata (.json) importado na página inicial */
 interface Extracao {
   ata: Partial<Record<keyof AtaInfo, string>>;
   modulos: string[];
@@ -71,10 +72,11 @@ interface Rascunho {
   ataId: string;
   setor: string;
   servico: string;
-  arquivo: Anexo | null;
+  /** PDF original da ata, enviado ao criar */
+  pdf: File | null;
   base: Base;
   avisos: string[];
-  lidoPorIA: boolean;
+  importado: boolean;
 }
 
 // ---------------------------------------------------------------- Dados
@@ -94,7 +96,7 @@ const dataValida = (v: unknown) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}
 const numero = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? Math.round(v * 100) / 100 : 0);
 const textoLimpo = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
 
-/** Transforma o que a IA leu na estrutura do sistema (módulos com cor, itens com id) */
+/** Transforma o arquivo de dados na estrutura do sistema (módulos com cor, itens com id) */
 export function montarBase(ext: Extracao): Base {
   const vazia = criarBaseVazia();
   const ata: AtaInfo = { ...vazia.ata, coordenador: '', cargoCoordenador: '', responsavelTecnico: '' };
@@ -235,163 +237,117 @@ function CartaoAta({ linha, base, abrir, verArquivo, excluir }: { linha: LinhaAt
   );
 }
 
-function NovaAta({ cliente, aoLer, aoCadastrarManual }: { cliente: SupabaseClient; aoLer: (r: Rascunho) => void; aoCadastrarManual: (r: Rascunho) => void }) {
+/** Lê o arquivo de dados da ata (.json): o formato de importação ou um backup do sistema */
+export function lerArquivoDeDados(texto: string): { base: Base; avisos: string[] } {
+  let bruto: unknown;
+  try {
+    bruto = JSON.parse(texto.replace(/^﻿/, ''));
+  } catch {
+    throw new Error('Esse arquivo não é um arquivo de dados válido (.json).');
+  }
+  const o = (bruto ?? {}) as Record<string, unknown>;
+  // Backup exportado pelo próprio sistema (Configuração da Ata › Exportar backup)
+  if (o.versao === 1 && Array.isArray(o.itens) && Array.isArray(o.modulos) && o.ata) {
+    const b = normalizarBase(o as unknown as Base);
+    return { base: { ...b, eventos: [] }, avisos: ['Arquivo de backup: os itens foram importados, os eventos não.'] };
+  }
+  if (!o.ata || !Array.isArray(o.itens)) throw new Error('O arquivo não tem os dados da ata (campos "ata" e "itens").');
+  const ext = { ata: o.ata, modulos: Array.isArray(o.modulos) ? o.modulos : [], itens: o.itens, avisos: Array.isArray(o.avisos) ? o.avisos : [] } as Extracao;
+  const base = montarBase(ext);
+  const avisos = ext.avisos.map(textoLimpo).filter(Boolean);
+  if (base.itens.length === 0) avisos.unshift('O arquivo não trouxe nenhum item. Adicione os itens abaixo.');
+  return { base, avisos };
+}
+
+function NovaAta({ aoContinuar }: { aoContinuar: (r: Rascunho) => void }) {
   const [setor, setSetor] = useState('');
   const [servico, setServico] = useState('');
-  const [arquivo, setArquivo] = useState<File | null>(null);
-  const [etapa, setEtapa] = useState<'' | 'enviando' | 'lendo'>('');
-  const [segundos, setSegundos] = useState(0);
+  const [pdf, setPdf] = useState<File | null>(null);
+  const [dados, setDados] = useState<File | null>(null);
   const [erro, setErro] = useState('');
-  const [arrastando, setArrastando] = useState(false);
-  const entrada = useRef<HTMLInputElement>(null);
-  const falhou = useRef<{ ataId: string; anexo: Anexo | null } | null>(null);
+  const entradaPdf = useRef<HTMLInputElement>(null);
+  const entradaDados = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    if (!etapa) return;
-    setSegundos(0);
-    const t = window.setInterval(() => setSegundos((s) => s + 1), 1000);
-    return () => window.clearInterval(t);
-  }, [etapa]);
-
-  const escolher = (f: File | undefined) => {
+  const escolherPdf = (f: File | undefined) => {
     setErro('');
     if (!f) return;
-    if (f.size > LIMITE_ATA) {
-      setErro('O arquivo passa de 30 MB. Envie um PDF menor (ex.: só as páginas da ata e da tabela de preços).');
-      return;
-    }
-    if (!/pdf|image\//i.test(f.type) && !/\.pdf$/i.test(f.name)) {
-      setErro('Envie a ata em PDF (ou uma foto JPG/PNG).');
-      return;
-    }
-    setArquivo(f);
+    if (f.size > LIMITE_ATA) return setErro('O PDF da ata passa de 30 MB.');
+    setPdf(f);
   };
 
-  const novoRascunho = (ataId: string, anexo: Anexo | null, base: Base, avisos: string[], lidoPorIA: boolean): Rascunho => ({
-    ataId,
+  const rascunho = (base: Base, avisos: string[], importado: boolean): Rascunho => ({
+    ataId: `ata-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     setor: setor.trim(),
     servico: servico.trim(),
-    arquivo: anexo,
+    pdf,
     base,
     avisos,
-    lidoPorIA,
+    importado,
   });
 
-  const ler = async () => {
-    if (!arquivo || !setor.trim() || !servico.trim()) return;
+  const importar = async () => {
+    if (!dados) return;
     setErro('');
-    const ataId = `ata-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
-    let anexo: Anexo | null = null;
     try {
-      setEtapa('enviando');
-      anexo = await enviarArquivo(conexaoPainel(cliente, ataId), 'ata', arquivo);
-      setEtapa('lendo');
-      const { data } = await cliente.auth.getSession();
-      const resp = await fetch('/api/ler-ata', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${data.session?.access_token ?? ''}` },
-        body: JSON.stringify({ caminho: anexo.caminho }),
-      });
-      const corpo = (await resp.json().catch(() => null)) as { dados?: Extracao; erro?: string } | null;
-      if (!resp.ok || !corpo?.dados) {
-        throw new Error(corpo?.erro ?? (resp.status === 404 ? 'A leitura com IA não está disponível neste endereço.' : `Falha na leitura (erro ${resp.status}).`));
-      }
-      const base = montarBase(corpo.dados);
-      const avisos = (corpo.dados.avisos ?? []).map(textoLimpo).filter(Boolean);
-      if (base.itens.length === 0) avisos.unshift('A IA não encontrou a tabela de itens. Confira o arquivo ou adicione os itens abaixo.');
-      setEtapa('');
-      aoLer(novoRascunho(ataId, anexo, base, avisos, true));
+      const { base, avisos } = lerArquivoDeDados(await dados.text());
+      aoContinuar(rascunho(base, avisos, true));
     } catch (err) {
-      setEtapa('');
-      falhou.current = { ataId, anexo };
       setErro(err instanceof Error ? err.message : String(err));
     }
   };
 
   const manual = () => {
-    const f = falhou.current;
-    const ataId = f?.ataId ?? `ata-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
     const b = criarBaseVazia();
-    const base: Base = { ...b, ata: { ...b.ata, coordenador: '', cargoCoordenador: '', responsavelTecnico: '' }, modulos: [{ id: 'm1', nome: 'Itens da Ata', cor: LISTA_CORES[0] }] };
-    aoCadastrarManual(novoRascunho(ataId, f?.anexo ?? null, base, [], false));
+    aoContinuar(rascunho({ ...b, ata: { ...b.ata, coordenador: '', cargoCoordenador: '', responsavelTecnico: '' }, modulos: [{ id: 'm1', nome: 'Itens da Ata', cor: LISTA_CORES[0] }] }, [], false));
   };
 
-  const ocupado = !!etapa;
-  const pronto = !!arquivo && !!setor.trim() && !!servico.trim();
+  const temNomes = !!setor.trim() && !!servico.trim();
+  const zona = 'flex w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed px-4 py-6 text-center transition border-slate-300 bg-slate-50 hover:border-cremesp-400 hover:bg-cremesp-50/50';
   return (
     <Card>
       <CardHeader
-        titulo="Anexar nova ata"
-        subtitulo="Informe o setor e o serviço, anexe o PDF da ata e a IA monta o sistema. Você confere tudo antes de criar."
-        icone={<Sparkles className="h-4 w-4" />}
+        titulo="Cadastrar nova ata"
+        subtitulo="Informe o setor e o serviço, anexe o PDF da ata e importe o arquivo de dados. Você confere tudo antes de criar."
+        icone={<Plus className="h-4 w-4" />}
       />
       <div className="grid gap-4 p-5 md:grid-cols-2">
         <Campo rotulo="Nome do setor">
-          <input id="nova-setor" className={inputCls} value={setor} disabled={ocupado} onChange={(e) => setSetor(e.target.value)} placeholder="Ex.: Departamento de Comunicação" />
+          <input id="nova-setor" className={inputCls} value={setor} onChange={(e) => setSetor(e.target.value)} placeholder="Ex.: Departamento de Comunicação" />
         </Campo>
         <Campo rotulo="A ata se refere a qual serviço ou produto?">
-          <input id="nova-servico" className={inputCls} value={servico} disabled={ocupado} onChange={(e) => setServico(e.target.value)} placeholder="Ex.: Locação de equipamentos de audiovisual" />
+          <input id="nova-servico" className={inputCls} value={servico} onChange={(e) => setServico(e.target.value)} placeholder="Ex.: Locação de equipamentos de audiovisual" />
         </Campo>
-        <div className="md:col-span-2">
-          <input
-            ref={entrada}
-            id="nova-arquivo"
-            type="file"
-            accept="application/pdf,.pdf,image/jpeg,image/png,image/webp"
-            className="hidden"
-            onChange={(e) => {
-              escolher(e.target.files?.[0]);
-              e.target.value = '';
-            }}
-          />
-          <button
-            type="button"
-            disabled={ocupado}
-            onClick={() => entrada.current?.click()}
-            onDragOver={(e) => {
-              e.preventDefault();
-              setArrastando(true);
-            }}
-            onDragLeave={() => setArrastando(false)}
-            onDrop={(e) => {
-              e.preventDefault();
-              setArrastando(false);
-              escolher(e.dataTransfer.files?.[0]);
-            }}
-            className={`flex w-full flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-8 text-center transition ${
-              arrastando ? 'border-cremesp-500 bg-cremesp-50' : 'border-slate-300 bg-slate-50 hover:border-cremesp-400 hover:bg-cremesp-50/50'
-            } disabled:opacity-60`}
-          >
-            <Upload className="h-6 w-6 text-cremesp-700" />
-            {arquivo ? (
-              <span className="text-sm font-medium text-slate-800">
-                {arquivo.name} <span className="font-normal text-slate-500">({fmtNum.format(arquivo.size / 1024 / 1024)} MB) · clique para trocar</span>
-              </span>
-            ) : (
-              <>
-                <span className="text-sm font-medium text-slate-800">Clique para anexar a ata ou arraste o arquivo aqui</span>
-                <span className="text-xs text-slate-500">PDF (até 30 MB). Também funciona com ata escaneada.</span>
-              </>
-            )}
+        <div>
+          <p className="mb-1 text-xs font-medium text-slate-600">1. PDF da ata (fica guardado para consulta)</p>
+          <input ref={entradaPdf} id="nova-pdf" type="file" accept="application/pdf,.pdf,image/jpeg,image/png" className="hidden" onChange={(e) => { escolherPdf(e.target.files?.[0]); e.target.value = ''; }} />
+          <button type="button" className={zona} onClick={() => entradaPdf.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); escolherPdf(e.dataTransfer.files?.[0]); }}>
+            <Upload className="h-5 w-5 text-cremesp-700" />
+            <span className="text-sm font-medium text-slate-800">{pdf ? pdf.name : 'Anexar o PDF da ata'}</span>
+            <span className="text-xs text-slate-500">{pdf ? `${fmtNum.format(pdf.size / 1024 / 1024)} MB · clique para trocar` : 'Opcional, até 30 MB'}</span>
+          </button>
+        </div>
+        <div>
+          <p className="mb-1 text-xs font-medium text-slate-600">2. Arquivo de dados da ata (.json)</p>
+          <input ref={entradaDados} id="nova-dados" type="file" accept="application/json,.json" className="hidden" onChange={(e) => { setErro(''); setDados(e.target.files?.[0] ?? null); e.target.value = ''; }} />
+          <button type="button" className={zona} onClick={() => entradaDados.current?.click()} onDragOver={(e) => e.preventDefault()} onDrop={(e) => { e.preventDefault(); setErro(''); setDados(e.dataTransfer.files?.[0] ?? null); }}>
+            <FileText className="h-5 w-5 text-cremesp-700" />
+            <span className="text-sm font-medium text-slate-800">{dados ? dados.name : 'Escolher o arquivo de dados'}</span>
+            <span className="text-xs text-slate-500">{dados ? 'clique para trocar' : 'Gerado a partir do PDF da ata'}</span>
           </button>
         </div>
         {erro && (
-          <div className="flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-800 md:col-span-2">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            <div>
-              <p>{erro}</p>
-              <button onClick={manual} className="mt-1 font-medium underline">
-                Cadastrar os itens à mão
-              </button>
-            </div>
-          </div>
+          <p className="flex items-start gap-2 rounded-lg bg-rose-50 p-3 text-sm text-rose-800 md:col-span-2">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {erro}
+          </p>
         )}
         <div className="flex flex-wrap items-center gap-3 md:col-span-2">
-          <Botao variante="primario" icone={ocupado ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} disabled={!pronto || ocupado} onClick={() => void ler()}>
-            {etapa === 'enviando' ? 'Enviando o arquivo…' : etapa === 'lendo' ? `Lendo a ata… ${segundos}s` : 'Ler ata com IA'}
+          <Botao variante="primario" icone={<Upload className="h-4 w-4" />} disabled={!temNomes || !dados} onClick={() => void importar()}>
+            Importar dados da ata
           </Botao>
-          {etapa === 'lendo' && <span className="text-xs text-slate-500">A leitura costuma levar de 1 a 3 minutos. Não feche esta página.</span>}
-          {!etapa && !pronto && <span className="text-xs text-slate-500">Preencha o setor, o serviço e anexe o arquivo.</span>}
+          <Botao disabled={!temNomes} onClick={manual}>
+            Cadastrar os itens à mão
+          </Botao>
+          {!temNomes && <span className="text-xs text-slate-500">Preencha o setor e o serviço.</span>}
         </div>
       </div>
     </Card>
@@ -458,7 +414,7 @@ function Revisao({ rascunho, criar, cancelar }: { rascunho: Rascunho; criar: (r:
         <div>
           <h1 className="text-lg font-semibold text-slate-900">Confira os dados da ata</h1>
           <p className="text-sm text-slate-500">
-            {r.lidoPorIA ? 'A IA leu o arquivo e preencheu o que encontrou. Corrija o que precisar antes de criar o sistema.' : 'Preencha os dados e os itens da ata.'}
+            {r.importado ? 'Os dados foram importados do arquivo. Corrija o que precisar antes de criar o sistema.' : 'Preencha os dados e os itens da ata.'}
           </p>
         </div>
         <div className="flex gap-2">
@@ -721,9 +677,10 @@ function Inicio({ cliente, sessao, acesso }: { cliente: SupabaseClient; sessao: 
   };
 
   const criar = async (r: Rascunho) => {
-    const { error: e1 } = await cliente.from('painel_atas').insert({ id: r.ataId, setor: r.setor, servico: r.servico, arquivo: r.arquivo, criado_por: email });
-    if (e1) throw new Error(`Não foi possível criar a ata. ${e1.message}`);
     const cx = conexaoPainel(cliente, r.ataId);
+    const arquivo = r.pdf ? await enviarArquivo(cx, 'ata', r.pdf) : null;
+    const { error: e1 } = await cliente.from('painel_atas').insert({ id: r.ataId, setor: r.setor, servico: r.servico, arquivo, criado_por: email });
+    if (e1) throw new Error(`Não foi possível criar a ata. ${e1.message}`);
     const linhas = [...baseParaRegistros(r.base).values()].map((reg) => linhaBanco(cx, reg));
     for (let i = 0; i < linhas.length; i += 500) {
       const { error } = await cliente.from('painel_registros').upsert(linhas.slice(i, i + 500));
@@ -803,7 +760,7 @@ function Inicio({ cliente, sessao, acesso }: { cliente: SupabaseClient; sessao: 
               </div>
             )}
             {atas && atas.length === 0 && !acesso.equipe && <p className="text-sm text-slate-500">Nenhuma ata liberada para você ainda.</p>}
-            {acesso.equipe && <NovaAta cliente={cliente} aoLer={setRascunho} aoCadastrarManual={setRascunho} />}
+            {acesso.equipe && <NovaAta aoContinuar={setRascunho} />}
           </>
         )}
       </main>
