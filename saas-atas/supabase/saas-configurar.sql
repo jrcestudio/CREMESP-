@@ -5,14 +5,15 @@
 -- administrador da plataforma, que cadastra os órgãos clientes.
 -- Pode rodar de novo sem problema (não apaga dados).
 --
--- Como os dados ficam separados:
---   orgaos            cada órgão cliente (nome, sigla, CNPJ, cor, logo, ativo)
---   painel_atas       as atas, cada uma de um órgão (orgao_id)
---   painel_registros  dados de cada ata (Ata, módulos, itens e eventos)
---   painel_membros    quem acessa: equipe do órgão (todas as atas dele) ou fornecedor (uma ata)
---   auditoria         histórico de alterações (quem, quando, antes e depois); ninguém edita
--- Cada pessoa só enxerga o que é do(s) órgão(s) em que foi cadastrada. Órgão com
--- "ativo = false" fica bloqueado (por exemplo, contrato encerrado).
+-- Hierarquia de acesso dentro de cada órgão (tabela painel_membros, coluna papel):
+--   gestor        Departamento de Licitação: vê e edita todas as atas e departamentos do órgão,
+--                 cadastra departamentos, representantes, dados do órgão (logo, cor).
+--   departamento  Representante de um departamento: só as atas do seu departamento; cadastra
+--                 colegas do departamento e os fiscais e fornecedores das atas dele.
+--   fiscal        Fiscal de uma ata: só as atas em que foi cadastrado (pode editar).
+--   fornecedor    Só o portal do fornecedor das atas em que foi cadastrado.
+-- Cada pessoa só enxerga o que a regra permite; a separação é feita pelo banco.
+-- Órgão com "ativo = false" fica bloqueado (por exemplo, contrato encerrado).
 
 create extension if not exists pgcrypto;
 
@@ -39,10 +40,19 @@ create table if not exists public.plataforma_admins (
   adicionado_em timestamptz not null default now()
 );
 
--- 3. Atas
+-- 3. Departamentos e atas
+create table if not exists public.departamentos (
+  id uuid primary key default gen_random_uuid(),
+  orgao_id text not null references public.orgaos (id) on delete cascade,
+  nome text not null check (length(trim(nome)) > 0),
+  criado_em timestamptz not null default now(),
+  unique (orgao_id, nome)
+);
+
 create table if not exists public.painel_atas (
   id text primary key,
   orgao_id text not null references public.orgaos (id) on delete cascade,
+  departamento_id uuid references public.departamentos (id) on delete restrict,
   setor text not null default '',
   servico text not null default '',
   arquivo jsonb,
@@ -50,6 +60,7 @@ create table if not exists public.painel_atas (
   criado_por text
 );
 create index if not exists painel_atas_orgao on public.painel_atas (orgao_id);
+create index if not exists painel_atas_departamento on public.painel_atas (departamento_id);
 
 -- 4. Dados de cada ata
 create table if not exists public.painel_registros (
@@ -64,15 +75,24 @@ create table if not exists public.painel_registros (
 );
 
 -- 5. Quem tem acesso
+--    gestor: departamento_id e ata_id vazios · departamento: departamento_id · fiscal e fornecedor: ata_id
 create table if not exists public.painel_membros (
+  id bigserial primary key,
   email text not null,
   orgao_id text not null references public.orgaos (id) on delete cascade,
-  papel text not null default 'equipe' check (papel in ('equipe', 'fornecedor')),
-  ata_id text not null default 'todas',
+  papel text not null check (papel in ('gestor', 'departamento', 'fiscal', 'fornecedor')),
+  departamento_id uuid references public.departamentos (id) on delete cascade,
+  ata_id text references public.painel_atas (id) on delete cascade,
   adicionado_por text,
   adicionado_em timestamptz not null default now(),
-  primary key (email, orgao_id, ata_id)
+  check (
+    (papel = 'gestor' and departamento_id is null and ata_id is null)
+    or (papel = 'departamento' and departamento_id is not null and ata_id is null)
+    or (papel in ('fiscal', 'fornecedor') and ata_id is not null and departamento_id is null)
+  )
 );
+create unique index if not exists painel_membros_unico on public.painel_membros
+  (lower(email), orgao_id, papel, coalesce(departamento_id::text, ''), coalesce(ata_id, ''));
 create index if not exists painel_membros_email on public.painel_membros (lower(email));
 
 -- 6. Histórico de alterações
@@ -112,26 +132,76 @@ returns text language sql stable security definer set search_path = public as $$
   select orgao_id from public.painel_atas where id = p_ata;
 $$;
 
-create or replace function public.eh_equipe(p_orgao text)
+create or replace function public.departamento_da_ata(p_ata text)
+returns uuid language sql stable security definer set search_path = public as $$
+  select departamento_id from public.painel_atas where id = p_ata;
+$$;
+
+create or replace function public.orgao_do_departamento(p_dep uuid)
+returns text language sql stable security definer set search_path = public as $$
+  select orgao_id from public.departamentos where id = p_dep;
+$$;
+
+-- Departamento de Licitação (gestor de todo o órgão)
+create or replace function public.eh_gestor(p_orgao text)
 returns boolean language sql stable security definer set search_path = public as $$
   select public.orgao_ativo(p_orgao) and exists (
     select 1 from public.painel_membros
-    where lower(email) = public.meu_email() and orgao_id = p_orgao and papel = 'equipe'
+    where lower(email) = public.meu_email() and orgao_id = p_orgao and papel = 'gestor'
   );
 $$;
 
-create or replace function public.eh_equipe_da_ata(p_ata text)
+-- Gestor do órgão ou representante deste departamento
+create or replace function public.cuida_do_departamento(p_dep uuid)
 returns boolean language sql stable security definer set search_path = public as $$
-  select public.eh_equipe(public.orgao_da_ata(p_ata));
+  select p_dep is not null and (
+    public.eh_gestor(public.orgao_do_departamento(p_dep))
+    or (public.orgao_ativo(public.orgao_do_departamento(p_dep)) and exists (
+      select 1 from public.painel_membros
+      where lower(email) = public.meu_email() and papel = 'departamento' and departamento_id = p_dep
+    ))
+  );
+$$;
+
+-- Quem trabalha na ata: gestor, representante do departamento dela ou fiscal dela
+create or replace function public.pode_editar_ata(p_ata text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.eh_gestor(public.orgao_da_ata(p_ata))
+    or public.cuida_do_departamento(public.departamento_da_ata(p_ata))
+    or (public.orgao_ativo(public.orgao_da_ata(p_ata)) and exists (
+      select 1 from public.painel_membros
+      where lower(email) = public.meu_email() and papel = 'fiscal' and ata_id = p_ata
+    ));
+$$;
+
+create or replace function public.eh_fiscal_da_ata(p_ata text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select exists (
+    select 1 from public.painel_membros
+    where lower(email) = public.meu_email() and papel = 'fiscal' and ata_id = p_ata
+  );
+$$;
+
+-- Gestor ou representante do departamento da ata (cadastra fiscais e fornecedores, exclui a ata)
+create or replace function public.administra_ata(p_ata text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.eh_gestor(public.orgao_da_ata(p_ata)) or public.cuida_do_departamento(public.departamento_da_ata(p_ata));
+$$;
+
+-- Qualquer pessoa da equipe interna do órgão (para ver a lista de departamentos)
+create or replace function public.eh_da_equipe(p_orgao text)
+returns boolean language sql stable security definer set search_path = public as $$
+  select public.orgao_ativo(p_orgao) and exists (
+    select 1 from public.painel_membros
+    where lower(email) = public.meu_email() and orgao_id = p_orgao and papel <> 'fornecedor'
+  );
 $$;
 
 create or replace function public.painel_fornecedor_da_ata(p_ata text)
 returns boolean language sql stable security definer set search_path = public as $$
-  select exists (
-    select 1 from public.painel_membros m
-    join public.painel_atas a on a.id = m.ata_id and a.orgao_id = m.orgao_id
-    join public.orgaos o on o.id = a.orgao_id and o.ativo
-    where lower(m.email) = public.meu_email() and m.papel = 'fornecedor' and m.ata_id = p_ata
+  select public.orgao_ativo(public.orgao_da_ata(p_ata)) and exists (
+    select 1 from public.painel_membros
+    where lower(email) = public.meu_email() and papel = 'fornecedor' and ata_id = p_ata
   );
 $$;
 
@@ -149,27 +219,61 @@ returns boolean language sql stable security definer set search_path = public as
   );
 $$;
 
--- O que a pessoa que entrou pode acessar: órgãos (com a identidade de cada um) e papel em cada um
+-- O que a pessoa que entrou pode acessar em cada órgão
 create or replace function public.painel_meu_acesso()
 returns jsonb language sql stable security definer set search_path = public as $$
+  with meus as (
+    select * from public.painel_membros where lower(email) = public.meu_email()
+  )
   select jsonb_build_object(
     'plataforma', public.eh_plataforma(),
     'orgaos', coalesce((
       select jsonb_agg(jsonb_build_object(
         'id', o.id, 'nome', o.nome, 'sigla', o.sigla, 'cnpj', o.cnpj, 'endereco', o.endereco,
         'cidade', o.cidade, 'uasg', o.uasg, 'cor', o.cor, 'logo', o.logo,
-        'equipe', exists (select 1 from public.painel_membros m where lower(m.email) = public.meu_email() and m.orgao_id = o.id and m.papel = 'equipe'),
-        'atas', coalesce((select jsonb_agg(m.ata_id) from public.painel_membros m where lower(m.email) = public.meu_email() and m.orgao_id = o.id and m.papel = 'fornecedor'), '[]'::jsonb)
+        'gestor', exists (select 1 from meus m where m.orgao_id = o.id and m.papel = 'gestor'),
+        'departamentos', coalesce((
+          select jsonb_agg(jsonb_build_object('id', d.id, 'nome', d.nome) order by d.nome)
+          from public.departamentos d
+          where d.orgao_id = o.id and (
+            exists (select 1 from meus m where m.orgao_id = o.id and m.papel = 'gestor')
+            or exists (select 1 from meus m where m.papel = 'departamento' and m.departamento_id = d.id)
+          )
+        ), '[]'::jsonb),
+        'representa', coalesce((select jsonb_agg(m.departamento_id) from meus m where m.orgao_id = o.id and m.papel = 'departamento'), '[]'::jsonb),
+        'fiscal', coalesce((select jsonb_agg(m.ata_id) from meus m where m.orgao_id = o.id and m.papel = 'fiscal'), '[]'::jsonb),
+        'atas', coalesce((select jsonb_agg(m.ata_id) from meus m where m.orgao_id = o.id and m.papel = 'fornecedor'), '[]'::jsonb)
       ) order by o.nome)
       from public.orgaos o
-      where o.ativo and exists (select 1 from public.painel_membros m where lower(m.email) = public.meu_email() and m.orgao_id = o.id)
+      where o.ativo and exists (select 1 from meus m where m.orgao_id = o.id)
     ), '[]'::jsonb)
   );
 $$;
 
 grant execute on function public.meu_email(), public.eh_plataforma(), public.orgao_ativo(text), public.orgao_da_ata(text),
-  public.eh_equipe(text), public.eh_equipe_da_ata(text), public.painel_fornecedor_da_ata(text),
+  public.departamento_da_ata(text), public.orgao_do_departamento(uuid), public.eh_gestor(text), public.cuida_do_departamento(uuid),
+  public.pode_editar_ata(text), public.eh_fiscal_da_ata(text), public.administra_ata(text), public.eh_da_equipe(text), public.painel_fornecedor_da_ata(text),
   public.painel_evento_do_fornecedor(text, text), public.painel_meu_acesso() to authenticated;
+
+-- Só o gestor muda uma ata de órgão ou de departamento
+create or replace function public.painel_atas_proteger()
+returns trigger language plpgsql security definer set search_path = public as $$
+begin
+  if new.orgao_id is distinct from old.orgao_id then
+    raise exception 'Uma ata não pode mudar de órgão.';
+  end if;
+  if new.departamento_id is distinct from old.departamento_id and not public.eh_gestor(old.orgao_id) then
+    raise exception 'Só o Departamento de Licitação pode mudar o departamento de uma ata.';
+  end if;
+  if new.departamento_id is not null and public.orgao_do_departamento(new.departamento_id) <> new.orgao_id then
+    raise exception 'Departamento de outro órgão.';
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists painel_atas_proteger on public.painel_atas;
+create trigger painel_atas_proteger before update on public.painel_atas
+  for each row execute function public.painel_atas_proteger();
 
 -- 8. Registro de quem alterou e histórico
 create or replace function public.painel_marcar_alteracao()
@@ -204,15 +308,17 @@ begin
   elsif tg_table_name = 'painel_atas' then
     v_ata := linha ->> 'id';
     v_orgao := linha ->> 'orgao_id';
+  elsif tg_table_name = 'departamentos' then
+    v_orgao := linha ->> 'orgao_id';
   else
-    v_ata := nullif(linha ->> 'ata_id', 'todas');
+    v_ata := linha ->> 'ata_id';
     v_orgao := linha ->> 'orgao_id';
   end if;
   if v_orgao is null then
     return null;
   end if;
   insert into public.auditoria (orgao_id, ata_id, tabela, colecao, registro_id, acao, por, antes, depois)
-  values (v_orgao, v_ata, tg_table_name, linha ->> 'colecao', coalesce(linha ->> 'id', linha ->> 'email'),
+  values (v_orgao, v_ata, tg_table_name, linha ->> 'colecao', case when tg_table_name = 'painel_membros' then linha ->> 'email' else linha ->> 'id' end,
           lower(tg_op), auth.jwt() ->> 'email', antigo, novo);
   return null;
 end;
@@ -223,13 +329,17 @@ create trigger auditoria_registros after insert or update or delete on public.pa
 drop trigger if exists auditoria_atas on public.painel_atas;
 create trigger auditoria_atas after insert or update or delete on public.painel_atas
   for each row execute function public.registrar_auditoria();
+drop trigger if exists auditoria_departamentos on public.departamentos;
+create trigger auditoria_departamentos after insert or update or delete on public.departamentos
+  for each row execute function public.registrar_auditoria();
 drop trigger if exists auditoria_membros on public.painel_membros;
 create trigger auditoria_membros after insert or update or delete on public.painel_membros
   for each row execute function public.registrar_auditoria();
 
--- 9. Segurança (cada linha só para quem é do órgão)
+-- 9. Segurança (cada linha só para quem a hierarquia permite)
 alter table public.orgaos enable row level security;
 alter table public.plataforma_admins enable row level security;
+alter table public.departamentos enable row level security;
 alter table public.painel_atas enable row level security;
 alter table public.painel_registros enable row level security;
 alter table public.painel_membros enable row level security;
@@ -243,32 +353,86 @@ drop policy if exists "plataforma le admins" on public.plataforma_admins;
 create policy "plataforma le admins" on public.plataforma_admins for select to authenticated
   using (public.eh_plataforma());
 
+drop policy if exists "equipe le departamentos" on public.departamentos;
+create policy "equipe le departamentos" on public.departamentos for select to authenticated
+  using (public.eh_da_equipe(orgao_id) or public.eh_plataforma());
+drop policy if exists "gestor cria departamentos" on public.departamentos;
+create policy "gestor cria departamentos" on public.departamentos for insert to authenticated
+  with check (public.eh_gestor(orgao_id));
+drop policy if exists "gestor altera departamentos" on public.departamentos;
+create policy "gestor altera departamentos" on public.departamentos for update to authenticated
+  using (public.eh_gestor(orgao_id)) with check (public.eh_gestor(orgao_id));
+drop policy if exists "gestor exclui departamentos" on public.departamentos;
+create policy "gestor exclui departamentos" on public.departamentos for delete to authenticated
+  using (public.eh_gestor(orgao_id));
+
 drop policy if exists "equipe usa painel_atas" on public.painel_atas;
-create policy "equipe usa painel_atas" on public.painel_atas for all to authenticated
-  using (public.eh_equipe(orgao_id)) with check (public.eh_equipe(orgao_id));
+drop policy if exists "equipe le painel_atas" on public.painel_atas;
+-- (usa as colunas da própria linha, para valer também logo após o insert)
+create policy "equipe le painel_atas" on public.painel_atas for select to authenticated
+  using (
+    public.eh_gestor(orgao_id) or public.cuida_do_departamento(departamento_id)
+    or (public.orgao_ativo(orgao_id) and public.eh_fiscal_da_ata(id))
+  );
 drop policy if exists "fornecedor le painel_atas" on public.painel_atas;
 create policy "fornecedor le painel_atas" on public.painel_atas for select to authenticated
   using (public.painel_fornecedor_da_ata(id));
+drop policy if exists "cria painel_atas" on public.painel_atas;
+create policy "cria painel_atas" on public.painel_atas for insert to authenticated
+  with check (
+    public.eh_gestor(orgao_id)
+    or (public.cuida_do_departamento(departamento_id) and public.orgao_do_departamento(departamento_id) = orgao_id)
+  );
+drop policy if exists "altera painel_atas" on public.painel_atas;
+create policy "altera painel_atas" on public.painel_atas for update to authenticated
+  using (public.pode_editar_ata(id))
+  with check (
+    public.eh_gestor(orgao_id) or public.cuida_do_departamento(departamento_id)
+    or (public.orgao_ativo(orgao_id) and public.eh_fiscal_da_ata(id))
+  );
+drop policy if exists "exclui painel_atas" on public.painel_atas;
+create policy "exclui painel_atas" on public.painel_atas for delete to authenticated
+  using (public.administra_ata(id));
 
 drop policy if exists "equipe usa painel_registros" on public.painel_registros;
 create policy "equipe usa painel_registros" on public.painel_registros for all to authenticated
-  using (public.eh_equipe_da_ata(ata_id)) with check (public.eh_equipe_da_ata(ata_id));
+  using (public.pode_editar_ata(ata_id)) with check (public.pode_editar_ata(ata_id));
 drop policy if exists "fornecedor le painel_registros" on public.painel_registros;
 create policy "fornecedor le painel_registros" on public.painel_registros for select to authenticated
   using (public.painel_fornecedor_da_ata(ata_id) and (colecao <> 'eventos' or public.painel_evento_visivel(dados)));
 
--- Equipe cadastra colegas e fornecedores do próprio órgão; a plataforma cadastra o primeiro membro.
+-- Quem vê e cadastra quem:
+--   gestor: todo o órgão · representante: colegas do departamento e fiscais/fornecedores das atas dele
+--   fiscal: vê quem tem acesso às atas dele · cada um vê os próprios acessos
 drop policy if exists "equipe usa painel_membros" on public.painel_membros;
-create policy "equipe usa painel_membros" on public.painel_membros for all to authenticated
-  using (public.eh_equipe(orgao_id) or public.eh_plataforma())
+drop policy if exists "le painel_membros" on public.painel_membros;
+create policy "le painel_membros" on public.painel_membros for select to authenticated
+  using (
+    lower(email) = public.meu_email()
+    or public.eh_gestor(orgao_id) or public.eh_plataforma()
+    or (papel = 'departamento' and public.cuida_do_departamento(departamento_id))
+    or (ata_id is not null and public.pode_editar_ata(ata_id))
+  );
+drop policy if exists "cadastra painel_membros" on public.painel_membros;
+create policy "cadastra painel_membros" on public.painel_membros for insert to authenticated
   with check (
-    (public.eh_equipe(orgao_id) or public.eh_plataforma())
-    and ((papel = 'equipe' and ata_id = 'todas') or (papel = 'fornecedor' and public.orgao_da_ata(ata_id) = orgao_id))
+    (public.eh_gestor(orgao_id) or public.eh_plataforma()
+      or (papel = 'departamento' and public.cuida_do_departamento(departamento_id))
+      or (papel in ('fiscal', 'fornecedor') and public.administra_ata(ata_id)))
+    and (departamento_id is null or public.orgao_do_departamento(departamento_id) = orgao_id)
+    and (ata_id is null or public.orgao_da_ata(ata_id) = orgao_id)
+  );
+drop policy if exists "remove painel_membros" on public.painel_membros;
+create policy "remove painel_membros" on public.painel_membros for delete to authenticated
+  using (
+    public.eh_gestor(orgao_id) or public.eh_plataforma()
+    or (papel = 'departamento' and public.cuida_do_departamento(departamento_id))
+    or (papel in ('fiscal', 'fornecedor') and public.administra_ata(ata_id))
   );
 
 drop policy if exists "equipe le auditoria" on public.auditoria;
 create policy "equipe le auditoria" on public.auditoria for select to authenticated
-  using (public.eh_equipe(orgao_id));
+  using (public.eh_gestor(orgao_id) or (ata_id is not null and public.pode_editar_ata(ata_id)));
 
 -- 10. Arquivos (PDF da ata e anexos dos eventos), limite de 32 MB
 --     Caminhos: <id da ata>/ata/...  e  <id da ata>/eventos/<id do evento>/...
@@ -278,8 +442,8 @@ on conflict (id) do update set public = false, file_size_limit = excluded.file_s
 
 drop policy if exists "equipe usa painel-anexos" on storage.objects;
 create policy "equipe usa painel-anexos" on storage.objects for all to authenticated
-  using (bucket_id = 'painel-anexos' and public.eh_equipe_da_ata((storage.foldername(name))[1]))
-  with check (bucket_id = 'painel-anexos' and public.eh_equipe_da_ata((storage.foldername(name))[1]));
+  using (bucket_id = 'painel-anexos' and public.pode_editar_ata((storage.foldername(name))[1]))
+  with check (bucket_id = 'painel-anexos' and public.pode_editar_ata((storage.foldername(name))[1]));
 
 drop policy if exists "fornecedor le painel-anexos" on storage.objects;
 create policy "fornecedor le painel-anexos" on storage.objects for select to authenticated
@@ -298,14 +462,14 @@ create policy "fornecedor envia painel-anexos" on storage.objects for insert to 
   );
 
 -- 11. Ações
--- 11a. Equipe atualiza a identidade do próprio órgão (nome, logo, cor, dados do contratante)
+-- 11a. Gestor atualiza a identidade do próprio órgão (nome, logo, cor, dados do contratante)
 create or replace function public.orgao_atualizar(p_orgao text, p_dados jsonb)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
   o public.orgaos;
 begin
-  if not (public.eh_equipe(p_orgao) or public.eh_plataforma()) then
-    raise exception 'Somente a equipe do órgão pode alterar estes dados.';
+  if not (public.eh_gestor(p_orgao) or public.eh_plataforma()) then
+    raise exception 'Somente o Departamento de Licitação pode alterar estes dados.';
   end if;
   update public.orgaos set
     nome = coalesce(nullif(trim(p_dados ->> 'nome'), ''), nome),
@@ -431,7 +595,7 @@ $$;
 revoke all on function public.painel_fornecedor_acao(text, text, text, text, jsonb) from public;
 grant execute on function public.painel_fornecedor_acao(text, text, text, text, jsonb) to authenticated;
 
--- 11c. Plataforma: cria um órgão cliente e o primeiro membro da equipe dele
+-- 11c. Plataforma: cria um órgão cliente e o primeiro gestor (Departamento de Licitação)
 create or replace function public.plataforma_criar_orgao(p_id text, p_nome text, p_sigla text, p_email text, p_cnpj text default '', p_cor text default '#2563eb')
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare
@@ -446,8 +610,8 @@ begin
   insert into public.orgaos (id, nome, sigla, cnpj, cor)
   values (lower(trim(p_id)), trim(p_nome), trim(coalesce(p_sigla, '')), trim(coalesce(p_cnpj, '')), coalesce(nullif(p_cor, ''), '#2563eb'))
   returning * into o;
-  insert into public.painel_membros (email, orgao_id, papel, ata_id, adicionado_por)
-  values (lower(trim(p_email)), o.id, 'equipe', 'todas', auth.jwt() ->> 'email');
+  insert into public.painel_membros (email, orgao_id, papel, adicionado_por)
+  values (lower(trim(p_email)), o.id, 'gestor', auth.jwt() ->> 'email');
   return to_jsonb(o);
 end;
 $$;
@@ -462,9 +626,10 @@ returns jsonb language sql stable security definer set search_path = public as $
       'id', o.id, 'nome', o.nome, 'sigla', o.sigla, 'cnpj', o.cnpj, 'cor', o.cor, 'ativo', o.ativo,
       'observacoes', o.observacoes, 'criado_em', o.criado_em,
       'atas', (select count(*) from public.painel_atas a where a.orgao_id = o.id),
-      'equipe', (select count(*) from public.painel_membros m where m.orgao_id = o.id and m.papel = 'equipe'),
+      'equipe', (select count(distinct lower(m.email)) from public.painel_membros m where m.orgao_id = o.id and m.papel <> 'fornecedor'),
+      'departamentos', (select count(*) from public.departamentos d where d.orgao_id = o.id),
       'fornecedores', (select count(distinct m.email) from public.painel_membros m where m.orgao_id = o.id and m.papel = 'fornecedor'),
-      'responsaveis', coalesce((select jsonb_agg(m.email order by m.adicionado_em) from public.painel_membros m where m.orgao_id = o.id and m.papel = 'equipe'), '[]'::jsonb),
+      'responsaveis', coalesce((select jsonb_agg(m.email order by m.adicionado_em) from public.painel_membros m where m.orgao_id = o.id and m.papel = 'gestor'), '[]'::jsonb),
       'ultimo_uso', (select max(em) from public.auditoria x where x.orgao_id = o.id)
     ) order by o.nome) from public.orgaos o
   ), '[]'::jsonb) end;

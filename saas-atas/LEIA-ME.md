@@ -19,6 +19,19 @@ Supabase) e site próprio (um projeto novo na Vercel). O Gestor de Atas da REDXC
 - O resto é o mesmo Painel: importar a ata (.json), saldos, simulador, ordem de orçamento, eventos e andamento,
   relatórios, anexos e portal do fornecedor.
 
+## Quem vê o quê dentro de cada órgão
+
+| Papel | Quem é | O que acessa |
+| :-- | :-- | :-- |
+| Gestor | Departamento de Licitação | Todas as atas e departamentos; cadastra departamentos, representantes, logo e dados do órgão |
+| Representante | Uma pessoa de cada departamento | Só as atas do seu departamento; cadastra colegas do departamento e os fiscais e fornecedores dessas atas |
+| Fiscal | Fiscal de uma ata | Só as atas em que foi cadastrado (pode editar) |
+| Fornecedor | Empresa da ata | Só o portal do fornecedor das atas dele |
+
+O gestor cria os departamentos em **Departamentos**. Cada ata nova pertence a um departamento. Fiscais e fornecedores
+são cadastrados dentro da ata, em *Configuração da Ata*. A cor do órgão (ex.: verde Cremesp) é aplicada no menu,
+nos cards e nos botões.
+
 ## Como publicar (sem terminal)
 
 1. **Supabase:** crie um projeto **novo** (região *South America (São Paulo)*). Em *Authentication › Sign In / Providers
@@ -29,9 +42,9 @@ Supabase) e site próprio (um projeto novo na Vercel). O Gestor de Atas da REDXC
    Em *Environment Variables*, adicione `VITE_SUPABASE_URL` e `VITE_SUPABASE_ANON_KEY` (em Supabase › *Project
    Settings › API*; use a chave *publishable* / *anon*). Clique em **Deploy**.
 3. Abra o site, clique em **Primeiro acesso** com o seu e-mail e crie a senha. Você cai na *Administração da
-   plataforma*: cadastre o órgão e o e-mail do responsável dele.
-4. Mande o link ao responsável do órgão. No primeiro acesso ele cria a senha e já entra no órgão; depois cadastra
-   colegas e fornecedores em *Configuração da Ata › Quem tem acesso* e ajusta logo e dados em *Dados do órgão*.
+   plataforma*: cadastre o órgão, a cor dele e o e-mail do gestor (Departamento de Licitação).
+4. Mande o link ao gestor do órgão. No primeiro acesso ele cria a senha e já entra no órgão; depois cria os
+   departamentos e seus representantes em *Departamentos* e ajusta logo e dados em *Dados do órgão*.
 
 Quem é de mais de um órgão (ou você, se entrar na equipe de um cliente para dar suporte) escolhe o órgão ao entrar.
 "Entrar na equipe" de um cliente fica registrado no histórico dele.

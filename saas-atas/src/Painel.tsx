@@ -8,10 +8,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
-import { AlertTriangle, ArrowLeftRight, ArrowRight, Bell, Building2, FilePlus2, FileText, History, LayoutDashboard, Loader2, LogOut, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, ArrowRight, Bell, Building2, FilePlus2, FileText, History, LayoutDashboard, Loader2, LogOut, Network, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-react';
 import { PRODUTO, definirMarca, marca } from './marca';
 import type { Orgao } from './marca';
-import { DadosOrgao, Historico, Plataforma } from './Plataforma';
+import { DadosOrgao, Departamentos, Historico, Plataforma } from './Plataforma';
 import {
   AppCompartilhado,
   Botao,
@@ -50,6 +50,7 @@ const LIMITE_ATA = 30 * 1024 * 1024;
 interface LinhaAta {
   id: string;
   orgao_id: string;
+  departamento_id: string | null;
   setor: string;
   servico: string;
   arquivo: Anexo | null;
@@ -57,9 +58,23 @@ interface LinhaAta {
   criado_por: string | null;
 }
 
-/** Papel da pessoa em um órgão: equipe (todas as atas) ou fornecedor (as atas listadas) */
+interface Departamento {
+  id: string;
+  nome: string;
+}
+
+/**
+ * Papéis da pessoa em um órgão:
+ *   gestor (Departamento de Licitação, todas as atas) · representa (departamentos dela)
+ *   fiscal (atas específicas) · atas (fornecedor). equipe = qualquer papel interno.
+ */
 interface Acesso {
   equipe: boolean;
+  gestor: boolean;
+  /** Departamentos que a pessoa enxerga (todos, para o gestor) */
+  departamentos: Departamento[];
+  representa: string[];
+  fiscal: string[];
   atas: string[];
 }
 
@@ -80,6 +95,8 @@ interface Extracao {
 
 interface Rascunho {
   ataId: string;
+  /** Departamento dono da ata; setor guarda o nome dele para exibição */
+  departamentoId: string;
   setor: string;
   servico: string;
   /** PDF original da ata, enviado ao criar */
@@ -211,8 +228,9 @@ export function lerArquivoDeDados(texto: string): { base: Base; avisos: string[]
   return { base, avisos };
 }
 
-function NovaAta({ aoContinuar }: { aoContinuar: (r: Rascunho) => void }) {
-  const [setor, setSetor] = useState('');
+function NovaAta({ aoContinuar, departamentos }: { aoContinuar: (r: Rascunho) => void; departamentos: Departamento[] }) {
+  const [departamentoId, setDepartamentoId] = useState(departamentos.length === 1 ? departamentos[0].id : '');
+  const setor = departamentos.find((d) => d.id === departamentoId)?.nome ?? '';
   const [servico, setServico] = useState('');
   const [pdf, setPdf] = useState<File | null>(null);
   const [dados, setDados] = useState<File | null>(null);
@@ -229,6 +247,7 @@ function NovaAta({ aoContinuar }: { aoContinuar: (r: Rascunho) => void }) {
 
   const rascunho = (base: Base, avisos: string[], importado: boolean): Rascunho => ({
     ataId: `ata-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    departamentoId,
     setor: setor.trim(),
     servico: servico.trim(),
     pdf,
@@ -259,12 +278,19 @@ function NovaAta({ aoContinuar }: { aoContinuar: (r: Rascunho) => void }) {
     <Card>
       <CardHeader
         titulo="Cadastrar nova ata"
-        subtitulo="Informe o setor e o serviço, anexe o PDF da ata e importe o arquivo de dados. Você confere tudo antes de criar."
+        subtitulo="Escolha o departamento e o serviço, anexe o PDF da ata e importe o arquivo de dados. Você confere tudo antes de criar."
         icone={<Plus className="h-4 w-4" />}
       />
       <div className="grid gap-4 p-5 md:grid-cols-2">
-        <Campo rotulo="Nome do setor">
-          <input id="nova-setor" className={inputCls} value={setor} onChange={(e) => setSetor(e.target.value)} placeholder="Ex.: Departamento de Comunicação" />
+        <Campo rotulo="Departamento">
+          <select id="nova-setor" className={inputCls} value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)}>
+            <option value="">Escolha o departamento</option>
+            {departamentos.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.nome}
+              </option>
+            ))}
+          </select>
         </Campo>
         <Campo rotulo="A ata se refere a qual serviço ou produto?">
           <input id="nova-servico" className={inputCls} value={servico} onChange={(e) => setServico(e.target.value)} placeholder="Ex.: Locação de equipamentos de audiovisual" />
@@ -299,7 +325,7 @@ function NovaAta({ aoContinuar }: { aoContinuar: (r: Rascunho) => void }) {
           <Botao disabled={!temNomes} onClick={manual}>
             Cadastrar os itens à mão
           </Botao>
-          {!temNomes && <span className="text-xs text-slate-500">Preencha o setor e o serviço.</span>}
+          {!temNomes && <span className="text-xs text-slate-500">Escolha o departamento e preencha o serviço.</span>}
         </div>
       </div>
     </Card>
@@ -347,7 +373,7 @@ function Revisao({ rascunho, criar, cancelar }: { rascunho: Rascunho; criar: (r:
 
   const confirmar = async () => {
     if (!r.setor.trim() || !r.servico.trim()) {
-      setErro('Informe o setor e o serviço.');
+      setErro('Informe o departamento e o serviço.');
       return;
     }
     setSalvando(true);
@@ -396,8 +422,8 @@ function Revisao({ rascunho, criar, cancelar }: { rascunho: Rascunho; criar: (r:
       <Card>
         <CardHeader titulo="Dados gerais" subtitulo="Aparecem no painel, na ordem de serviço e nos relatórios" icone={<FileText className="h-4 w-4" />} />
         <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-3">
-          <Campo rotulo="Nome do setor">
-            <input id="rev-setor" className={inputCls} value={r.setor} onChange={(e) => setR((x) => ({ ...x, setor: e.target.value }))} />
+          <Campo rotulo="Departamento">
+            <input id="rev-setor" className={inputCls} value={r.setor} disabled />
           </Campo>
           <Campo rotulo="Serviço / produto" className="lg:col-span-2">
             <input id="rev-servico" className={inputCls} value={r.servico} onChange={(e) => setR((x) => ({ ...x, servico: e.target.value }))} />
@@ -580,6 +606,10 @@ function AtaAberta({ cliente, sessao, linha, papel, aoVoltar }: { cliente: Supab
 
 // ---------------------------------------------------------------- Peças da página inicial
 
+/** A pessoa trabalha nesta ata (gestor, representante do departamento ou fiscal) */
+const trabalhaNaAta = (a: Acesso, l: { id: string; departamento_id: string | null }) =>
+  a.gestor || (!!l.departamento_id && a.representa.includes(l.departamento_id)) || a.fiscal.includes(l.id);
+
 const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 /** Etapas em que o evento espera uma ação da equipe do órgão */
 const ETAPAS_COM_EQUIPE = new Set(['revisado_fornecedor', 'ajuste_solicitado', 'aguardando_diretoria', 'realizado', 'nota_recebida']);
@@ -601,10 +631,11 @@ const dataDeHoje = () => {
   return t.charAt(0).toUpperCase() + t.slice(1);
 };
 
+// Três tons da cor do órgão (claro, médio e escuro)
 const CORES_RESUMO = {
-  azul: 'from-[#4a7bff] to-[#3b6cf6] shadow-[0_12px_28px_-10px_rgba(59,108,246,0.55)]',
-  roxo: 'from-[#9064ff] to-[#7a4df2] shadow-[0_12px_28px_-10px_rgba(122,77,242,0.55)]',
-  verde: 'from-[#26cbbf] to-[#12b3a8] shadow-[0_12px_28px_-10px_rgba(18,179,168,0.55)]',
+  claro: 'from-marca-400 to-marca-600 shadow-[0_12px_28px_-10px_rgb(var(--marca-500)/0.6)]',
+  medio: 'from-marca-600 to-marca-800 shadow-[0_12px_28px_-10px_rgb(var(--marca-700)/0.6)]',
+  escuro: 'from-marca-800 to-marca-900 shadow-[0_12px_28px_-10px_rgb(var(--marca-900)/0.6)]',
 };
 
 function CardResumo({ cor, titulo, emoji, numero, detalhe }: { cor: keyof typeof CORES_RESUMO; titulo: string; emoji: string; numero: number; detalhe: string }) {
@@ -622,7 +653,7 @@ function CardResumo({ cor, titulo, emoji, numero, detalhe }: { cor: keyof typeof
   );
 }
 
-const CORES_AVATAR = ['bg-blue-500', 'bg-violet-500', 'bg-teal-500', 'bg-coral', 'bg-amber-500'];
+const CORES_AVATAR = ['bg-marca-500', 'bg-marca-700', 'bg-slate-500', 'bg-marca-900', 'bg-amber-500'];
 
 function LinhaDeAta({ linha, base, hoje, abrir, verArquivo, excluir }: { linha: LinhaAta; base: Base | undefined; hoje: string; abrir: () => void; verArquivo?: () => void; excluir?: () => void }) {
   const ata = base?.ata;
@@ -684,14 +715,14 @@ const irParaAta = (id: string) => {
   window.location.hash = id ? `ata=${encodeURIComponent(id)}` : '';
 };
 
-function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: SupabaseClient; sessao: Session; acesso: Acesso; orgao: Orgao; trocarOrgao?: () => void }) {
+function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao, recarregarAcesso }: { cliente: SupabaseClient; sessao: Session; acesso: Acesso; orgao: Orgao; trocarOrgao?: () => void; recarregarAcesso: () => void }) {
   const [atas, setAtas] = useState<LinhaAta[] | null>(null);
   const [bases, setBases] = useState<Map<string, Base>>(new Map());
   const [erro, setErro] = useState('');
   const [aberta, setAberta] = useState(ataDaUrl);
   const [rascunho, setRascunho] = useState<Rascunho | null>(null);
   const [busca, setBusca] = useState('');
-  const [tela, setTela] = useState<'atas' | 'orgao' | 'historico'>('atas');
+  const [tela, setTela] = useState<'atas' | 'departamentos' | 'orgao' | 'historico'>('atas');
   const [mostrarNova, setMostrarNova] = useState(false);
   const refNova = useRef<HTMLDivElement>(null);
   const email = sessao.user.email ?? '';
@@ -700,7 +731,7 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
   const carregar = useCallback(async () => {
     try {
       const linhas = await lerTudo<LinhaAta>((de, ate) =>
-        cliente.from('painel_atas').select('id, orgao_id, setor, servico, arquivo, criado_em, criado_por').eq('orgao_id', orgao.id).order('criado_em', { ascending: false }).range(de, ate),
+        cliente.from('painel_atas').select('id, orgao_id, departamento_id, setor, servico, arquivo, criado_em, criado_por').eq('orgao_id', orgao.id).order('criado_em', { ascending: false }).range(de, ate),
       );
       let regs: (Registro & { ata_id: string })[] = [];
       const ids = linhas.map((l) => l.id);
@@ -742,7 +773,7 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
   const criar = async (r: Rascunho) => {
     const cx = conexaoPainel(cliente, r.ataId, orgao.id);
     // A ata é criada antes do PDF: o armazenamento só aceita arquivos de atas do órgão
-    const { error: e1 } = await cliente.from('painel_atas').insert({ id: r.ataId, orgao_id: orgao.id, setor: r.setor, servico: r.servico, arquivo: null, criado_por: email });
+    const { error: e1 } = await cliente.from('painel_atas').insert({ id: r.ataId, orgao_id: orgao.id, departamento_id: r.departamentoId || null, setor: r.setor, servico: r.servico, arquivo: null, criado_por: email });
     if (e1) throw new Error(`Não foi possível criar a ata. ${e1.message}`);
     if (r.pdf) {
       try {
@@ -777,7 +808,7 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
   const linhaAberta = aberta ? atas?.find((a) => a.id === aberta) : undefined;
   if (aberta && linhaAberta) {
     const podeVoltar = acesso.equipe || (atas?.length ?? 0) > 1;
-    return <AtaAberta key={linhaAberta.id} cliente={cliente} sessao={sessao} linha={linhaAberta} papel={acesso.equipe ? 'equipe' : 'fornecedor'} aoVoltar={podeVoltar ? voltar : undefined} />;
+    return <AtaAberta key={linhaAberta.id} cliente={cliente} sessao={sessao} linha={linhaAberta} papel={trabalhaNaAta(acesso, linhaAberta) ? 'equipe' : 'fornecedor'} aoVoltar={podeVoltar ? voltar : undefined} />;
   }
 
   const q = busca.trim().toLowerCase();
@@ -808,18 +839,18 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
   proximos.sort((a, b) => a.ev.dataInicio.localeCompare(b.ev.dataInicio));
 
   const nomeUsuario = primeiroNome(email);
+  const departamentosParaCriar = acesso.gestor ? acesso.departamentos : acesso.departamentos.filter((d) => acesso.representa.includes(d.id));
+  const podeCriar = departamentosParaCriar.length > 0 || acesso.gestor;
+  const papelTexto = acesso.gestor ? 'Departamento de Licitação' : acesso.representa.length ? `Representante · ${departamentosParaCriar.map((d) => d.nome).join(', ')}` : acesso.fiscal.length ? 'Fiscal de ata' : 'Fornecedor';
   const navegar = (t: typeof tela) => {
     setTela(t);
     setRascunho(null);
   };
   const itensMenu: { id: typeof tela; rotulo: string; icone: ReactNode }[] = [
     { id: 'atas', rotulo: acesso.equipe ? 'Painel' : 'Suas atas', icone: <LayoutDashboard className="h-5 w-5" /> },
-    ...(acesso.equipe
-      ? [
-          { id: 'orgao' as const, rotulo: 'Dados do órgão', icone: <Building2 className="h-5 w-5" /> },
-          { id: 'historico' as const, rotulo: 'Histórico', icone: <History className="h-5 w-5" /> },
-        ]
-      : []),
+    ...(acesso.gestor || acesso.representa.length > 0 ? [{ id: 'departamentos' as const, rotulo: 'Departamentos', icone: <Network className="h-5 w-5" /> }] : []),
+    ...(acesso.gestor ? [{ id: 'orgao' as const, rotulo: 'Dados do órgão', icone: <Building2 className="h-5 w-5" /> }] : []),
+    ...(acesso.equipe ? [{ id: 'historico' as const, rotulo: 'Histórico', icone: <History className="h-5 w-5" /> }] : []),
   ];
 
   return (
@@ -857,6 +888,7 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
         </nav>
         <div className="mt-auto hidden rounded-2xl bg-white/[0.06] p-3.5 text-xs lg:block">
           <p className="text-[13px] font-semibold text-white">{marca.nome || marca.sigla}</p>
+          <p className="mt-0.5 text-white/80">{papelTexto}</p>
           <p className="mt-0.5">
             {atas?.length ?? 0} {atas?.length === 1 ? 'ata' : 'atas'}
             {setores.size ? ` · ${setores.size} ${setores.size === 1 ? 'setor' : 'setores'}` : ''}
@@ -896,15 +928,17 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
           <div className="flex items-center gap-3">
             <span className="relative grid h-11 w-11 place-items-center rounded-2xl bg-white shadow-suave" title={pendentes ? `${pendentes} pendências da equipe` : 'Nenhuma pendência'}>
               <Bell className="h-5 w-5 text-slate-700" />
-              {pendentes > 0 && <span className="absolute right-2.5 top-2.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-coral" />}
+              {pendentes > 0 && <span className="absolute right-2.5 top-2.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-rose-500" />}
             </span>
-            <span className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-coral to-violet-600 text-sm font-semibold text-white shadow-suave" title={email}>
+            <span className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-marca-500 to-marca-800 text-sm font-semibold text-white shadow-suave" title={email}>
               {iniciais(email)}
             </span>
           </div>
         </header>
 
-        {tela === 'orgao' && acesso.equipe ? (
+        {tela === 'departamentos' && (acesso.gestor || acesso.representa.length > 0) ? (
+          <Departamentos cliente={cliente} orgao={orgao} gestor={acesso.gestor} departamentos={acesso.departamentos} meuEmail={email.toLowerCase()} aoMudar={recarregarAcesso} />
+        ) : tela === 'orgao' && acesso.gestor ? (
           <DadosOrgao cliente={cliente} orgao={orgao} />
         ) : tela === 'historico' && acesso.equipe ? (
           <Historico cliente={cliente} orgao={orgao} atas={(atas ?? []).map((l) => ({ id: l.id, nome: l.servico || bases.get(l.id)?.ata.numero || l.id }))} />
@@ -915,9 +949,9 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
             <div className="min-w-0 space-y-7">
               {/* 3. Cards de resumo */}
               <section className="grid gap-5 sm:grid-cols-3" aria-label="Resumo">
-                <CardResumo cor="azul" titulo="Atas vigentes" emoji="📄" numero={vigentes} detalhe={`${atas?.length ?? 0} no total`} />
-                <CardResumo cor="roxo" titulo="Eventos em andamento" emoji="📅" numero={emAndamento} detalhe={`${proximos.length} com data marcada`} />
-                <CardResumo cor="verde" titulo="Pendentes" emoji="⏳" numero={pendentes} detalhe="aguardam a equipe" />
+                <CardResumo cor="claro" titulo="Atas vigentes" emoji="📄" numero={vigentes} detalhe={`${atas?.length ?? 0} no total`} />
+                <CardResumo cor="medio" titulo="Eventos em andamento" emoji="📅" numero={emAndamento} detalhe={`${proximos.length} com data marcada`} />
+                <CardResumo cor="escuro" titulo="Pendentes" emoji="⏳" numero={pendentes} detalhe="aguardam a equipe" />
               </section>
 
               {erro && <p className="rounded-2xl bg-rose-50 p-3 text-sm text-rose-800">Não foi possível carregar as atas. {erro}</p>}
@@ -938,29 +972,29 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
                       base={bases.get(l.id)}
                       hoje={hoje}
                       abrir={() => irParaAta(l.id)}
-                      verArquivo={l.arquivo && acesso.equipe ? () => void abrirAnexoNoNavegador(conexaoPainel(cliente, l.id, orgao.id), l.arquivo!) : undefined}
-                      excluir={acesso.equipe ? () => void excluir(l) : undefined}
+                      verArquivo={l.arquivo && trabalhaNaAta(acesso, l) ? () => void abrirAnexoNoNavegador(conexaoPainel(cliente, l.id, orgao.id), l.arquivo!) : undefined}
+                      excluir={acesso.gestor || (l.departamento_id && acesso.representa.includes(l.departamento_id)) ? () => void excluir(l) : undefined}
                     />
                   ))}
                   {atas && atas.length === 0 && (
                     <p className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-suave">
-                      {acesso.equipe ? 'Nenhuma ata cadastrada ainda. Use “+ Nova ata” para começar.' : 'Nenhuma ata liberada para você ainda.'}
+                      {podeCriar ? 'Nenhuma ata cadastrada ainda. Use “+ Nova ata” para começar.' : 'Nenhuma ata liberada para você ainda.'}
                     </p>
                   )}
                   {atas && atas.length > 0 && lista.length === 0 && <p className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-suave">Nenhuma ata encontrada para “{busca}”.</p>}
                 </div>
               </section>
 
-              {acesso.equipe && (mostrarNova || (atas !== null && atas.length === 0)) && (
+              {podeCriar && (mostrarNova || (atas !== null && atas.length === 0)) && (
                 <div ref={refNova}>
-                  <NovaAta aoContinuar={setRascunho} />
+                  <NovaAta aoContinuar={setRascunho} departamentos={departamentosParaCriar} />
                 </div>
               )}
             </div>
 
             {/* 5. Painel lateral direito */}
             <aside className="grid gap-6 sm:grid-cols-2 xl:grid-cols-1">
-              {acesso.equipe && (
+              {podeCriar && (
                 <section className="rounded-[20px] bg-white p-5 shadow-suave">
                   <h2 className="mb-4 text-base font-semibold">Ações rápidas</h2>
                   <div className="space-y-3">
@@ -969,13 +1003,13 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
                         setMostrarNova(true);
                         window.setTimeout(() => refNova.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
                       }}
-                      className="flex w-full items-center justify-between rounded-2xl bg-gradient-to-br from-violet-500 to-violet-700 px-5 py-4 text-left text-[15px] font-semibold text-white shadow-[0_10px_22px_-8px_rgba(122,77,242,0.6)] transition hover:-translate-y-0.5"
+                      className="flex w-full items-center justify-between rounded-2xl bg-gradient-to-br from-marca-500 to-marca-700 px-5 py-4 text-left text-[15px] font-semibold text-white shadow-[0_10px_22px_-8px_rgb(var(--marca-600)/0.6)] transition hover:-translate-y-0.5"
                     >
                       + Nova ata <FilePlus2 className="h-5 w-5 opacity-90" />
                     </button>
                     <button
                       onClick={() => navegar('historico')}
-                      className="flex w-full items-center justify-between rounded-2xl bg-gradient-to-br from-[#ff8f7c] to-coral px-5 py-4 text-left text-[15px] font-semibold text-white shadow-[0_10px_22px_-8px_rgba(255,111,97,0.6)] transition hover:-translate-y-0.5"
+                      className="flex w-full items-center justify-between rounded-2xl bg-marca-50 px-5 py-4 text-left text-[15px] font-semibold text-marca-800 ring-1 ring-inset ring-marca-200 transition hover:-translate-y-0.5"
                     >
                       Ver histórico <History className="h-5 w-5 opacity-90" />
                     </button>
@@ -1048,7 +1082,7 @@ function EscolherOrgao({ email, acesso, escolher, sair }: { email: string; acess
               <span className="min-w-0">
                 <span className="block truncate text-sm font-semibold">{o.nome}</span>
                 <span className="block text-xs text-slate-500">
-                  {o.sigla || o.id} · {o.equipe ? 'Equipe' : 'Fornecedor'}
+                  {o.sigla || o.id} · {o.gestor ? 'Departamento de Licitação' : o.representa.length ? 'Representante de departamento' : o.fiscal.length ? 'Fiscal' : 'Fornecedor'}
                 </span>
               </span>
             </button>
@@ -1085,7 +1119,13 @@ function ModoPainel({ cliente }: { cliente: SupabaseClient }) {
       if (error) setAcesso({ erro: error.message });
       else {
         const d = (data ?? {}) as Partial<AcessoGeral>;
-        const orgaos = (Array.isArray(d.orgaos) ? d.orgaos : []).map((o) => ({ ...o, equipe: o.equipe === true, atas: Array.isArray(o.atas) ? o.atas : [] }));
+        const lista = <T,>(v: unknown) => (Array.isArray(v) ? (v as T[]) : []);
+        const orgaos = (Array.isArray(d.orgaos) ? d.orgaos : []).map((o) => {
+          const gestor = o.gestor === true;
+          const representa = lista<string>(o.representa);
+          const fiscal = lista<string>(o.fiscal);
+          return { ...o, gestor, representa, fiscal, departamentos: lista<Departamento>(o.departamentos), atas: lista<string>(o.atas), equipe: gestor || representa.length > 0 || fiscal.length > 0 };
+        });
         setAcesso({ plataforma: d.plataforma === true, orgaos });
       }
     });
@@ -1129,7 +1169,7 @@ function ModoPainel({ cliente }: { cliente: SupabaseClient }) {
     if (orgao) {
       // Define a identidade antes de desenhar a tela (o useEffect acima mantém o título e as cores)
       if (marca.id !== orgao.id) definirMarca(orgao);
-      return <Inicio key={orgao.id} cliente={cliente} sessao={sessao} acesso={orgao} orgao={orgao} trocarOrgao={variasOpcoes ? () => escolher('') : undefined} />;
+      return <Inicio key={orgao.id} cliente={cliente} sessao={sessao} acesso={orgao} orgao={orgao} trocarOrgao={variasOpcoes ? () => escolher('') : undefined} recarregarAcesso={carregarAcesso} />;
     }
     if (geral.plataforma && (escolhido === '__plataforma' || geral.orgaos.length === 0)) {
       return (

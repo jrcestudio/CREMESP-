@@ -4,7 +4,7 @@
  * ========================================================================== */
 import { useCallback, useEffect, useState } from 'react';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { Building2, History, Loader2, Plus, ShieldCheck, Upload } from 'lucide-react';
+import { Building2, History, Loader2, Network, Plus, ShieldCheck, Trash2, Upload, Users } from 'lucide-react';
 import { Botao, Card, CardHeader, Campo, fmtDataHora, inputCls } from './GestorAtas';
 import { COR_PADRAO, definirMarca, marca } from './marca';
 import type { Orgao } from './marca';
@@ -150,8 +150,9 @@ function descrever(l: LinhaAuditoria): string {
   const verbo = VERBO[l.acao] ?? l.acao;
   if (l.tabela === 'painel_atas') return `${verbo} a ata${nome('servico')}`;
   if (l.tabela === 'orgaos') return 'alterou os dados do órgão';
+  if (l.tabela === 'departamentos') return `${verbo} o departamento${nome('nome')}`;
   if (l.tabela === 'painel_membros') {
-    const papel = d.papel === 'fornecedor' ? 'fornecedor' : 'membro da equipe';
+    const papel = ({ gestor: 'Departamento de Licitação', departamento: 'representante de departamento', fiscal: 'fiscal da ata', fornecedor: 'fornecedor' } as Record<string, string>)[String(d.papel)] ?? String(d.papel);
     return l.acao === 'delete' ? `removeu o acesso de ${l.registro_id} (${papel})` : `deu acesso a ${l.registro_id} (${papel})`;
   }
   if (l.colecao === 'eventos') {
@@ -296,9 +297,9 @@ export function Plataforma({ cliente, meuEmail, aoMudar }: { cliente: SupabaseCl
   };
 
   const entrarComo = async (o: ResumoOrgao) => {
-    const { error } = await cliente.from('painel_membros').insert({ email: meuEmail.toLowerCase(), orgao_id: o.id, papel: 'equipe', ata_id: 'todas', adicionado_por: meuEmail });
+    const { error } = await cliente.from('painel_membros').insert({ email: meuEmail.toLowerCase(), orgao_id: o.id, papel: 'gestor', adicionado_por: meuEmail });
     if (error && error.code !== '23505') window.alert(`Não foi possível entrar na equipe. ${error.message}`);
-    else window.alert(`Você agora faz parte da equipe de ${o.nome} (fica registrado no histórico do órgão). Use "Trocar órgão" para entrar.`);
+    else window.alert(`Você agora é gestor em ${o.nome} (fica registrado no histórico do órgão). Use "Trocar órgão" para entrar.`);
     void carregar();
     aoMudar();
   };
@@ -315,7 +316,7 @@ export function Plataforma({ cliente, meuEmail, aoMudar }: { cliente: SupabaseCl
       {erro && <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">Não foi possível carregar. {erro}</p>}
 
       <Card>
-        <CardHeader titulo="Novo órgão cliente" subtitulo="Cria o órgão e libera o primeiro acesso da equipe dele. Depois, a própria equipe cadastra colegas, fornecedores, logo e dados." icone={<Plus className="h-4 w-4" />} />
+        <CardHeader titulo="Novo órgão cliente" subtitulo="Cria o órgão e o primeiro acesso do Departamento de Licitação (gestor). Depois, o gestor cadastra departamentos, representantes, logo e dados." icone={<Plus className="h-4 w-4" />} />
         <div className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-3">
           <Campo rotulo="Nome do órgão" className="lg:col-span-2">
             <input className={inputCls} value={novo.nome} placeholder="Conselho Regional de …" onChange={(e) => setNovo({ ...novo, nome: e.target.value, id: idManual ? novo.id : slug(novo.sigla || e.target.value) })} />
@@ -339,7 +340,7 @@ export function Plataforma({ cliente, meuEmail, aoMudar }: { cliente: SupabaseCl
           <Campo rotulo="Cor principal">
             <input type="color" className="h-9 w-14 cursor-pointer rounded border border-slate-300" value={novo.cor} onChange={(e) => setNovo({ ...novo, cor: e.target.value })} />
           </Campo>
-          <Campo rotulo="E-mail do responsável no órgão" className="sm:col-span-2">
+          <Campo rotulo="E-mail do gestor (Departamento de Licitação)" className="sm:col-span-2">
             <input type="email" className={inputCls} value={novo.email} placeholder="nome@orgao.gov.br" onChange={(e) => setNovo({ ...novo, email: e.target.value })} />
           </Campo>
         </div>
@@ -391,7 +392,7 @@ export function Plataforma({ cliente, meuEmail, aoMudar }: { cliente: SupabaseCl
                   <td className="space-x-2 whitespace-nowrap px-4 py-2.5 text-right">
                     {o.ativo && !o.responsaveis.includes(meuEmail.toLowerCase()) && (
                       <Botao tamanho="sm" onClick={() => void entrarComo(o)}>
-                        Entrar na equipe
+                        Entrar como gestor
                       </Botao>
                     )}
                     <Botao tamanho="sm" variante={o.ativo ? 'perigo' : 'sucesso'} onClick={() => void alternar(o)}>
@@ -411,6 +412,175 @@ export function Plataforma({ cliente, meuEmail, aoMudar }: { cliente: SupabaseCl
           </table>
         </div>
       </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- Departamentos e representantes
+
+interface Membro {
+  id: number;
+  email: string;
+  papel: string;
+  departamento_id: string | null;
+}
+
+function ListaDeEmails({ membros, meuEmail, remover, adicionar, placeholder, idCampo }: { membros: Membro[]; meuEmail: string; remover?: (m: Membro) => void; adicionar?: (email: string) => Promise<boolean>; placeholder: string; idCampo: string }) {
+  const [novo, setNovo] = useState('');
+  const enviar = async () => {
+    if (adicionar && novo.includes('@') && (await adicionar(novo.trim().toLowerCase()))) setNovo('');
+  };
+  return (
+    <div className="space-y-2">
+      <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+        {membros.map((m) => (
+          <li key={m.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+            <span className="min-w-0 truncate">
+              {m.email}
+              {m.email === meuEmail && <span className="ml-2 text-xs text-slate-400">(você)</span>}
+            </span>
+            {remover && m.email !== meuEmail && (
+              <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => remover(m)} aria-label={`Remover ${m.email}`}>
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </li>
+        ))}
+        {membros.length === 0 && <li className="px-3 py-2 text-sm text-slate-500">Ninguém cadastrado.</li>}
+      </ul>
+      {adicionar && (
+        <div className="flex gap-2">
+          <input id={idCampo} type="email" className={`${inputCls} min-w-0 flex-1`} placeholder={placeholder} value={novo} onChange={(e) => setNovo(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void enviar()} />
+          <Botao variante="primario" icone={<Plus className="h-4 w-4" />} disabled={!novo.includes('@')} onClick={() => void enviar()}>
+            Adicionar
+          </Botao>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function Departamentos({
+  cliente,
+  orgao,
+  gestor,
+  departamentos,
+  meuEmail,
+  aoMudar,
+}: {
+  cliente: SupabaseClient;
+  orgao: Orgao;
+  gestor: boolean;
+  departamentos: { id: string; nome: string }[];
+  meuEmail: string;
+  aoMudar: () => void;
+}) {
+  const [membros, setMembros] = useState<Membro[] | null>(null);
+  const [contagem, setContagem] = useState<Map<string, number>>(new Map());
+  const [novoDep, setNovoDep] = useState('');
+  const [msg, setMsg] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
+
+  const carregar = useCallback(async () => {
+    const { data } = await cliente.from('painel_membros').select('id, email, papel, departamento_id').eq('orgao_id', orgao.id).in('papel', ['gestor', 'departamento']).order('email');
+    setMembros((data ?? []) as Membro[]);
+    const { data: atas } = await cliente.from('painel_atas').select('departamento_id').eq('orgao_id', orgao.id);
+    const c = new Map<string, number>();
+    for (const a of (atas ?? []) as { departamento_id: string | null }[]) if (a.departamento_id) c.set(a.departamento_id, (c.get(a.departamento_id) ?? 0) + 1);
+    setContagem(c);
+  }, [cliente, orgao.id]);
+  useEffect(() => {
+    void carregar();
+  }, [carregar]);
+
+  const erroAmigavel = (e: { code?: string; message: string }) =>
+    e.code === '23505' ? 'Já cadastrado.' : e.code === '42501' ? 'Você não tem permissão para esta alteração.' : e.code === '23503' ? 'Este departamento ainda tem atas. Mova ou exclua as atas antes.' : e.message;
+
+  const adicionar = async (email: string, papel: 'gestor' | 'departamento', departamentoId?: string) => {
+    const { error } = await cliente.from('painel_membros').insert({ email, orgao_id: orgao.id, papel, departamento_id: departamentoId ?? null, adicionado_por: meuEmail });
+    setMsg(error ? { tipo: 'erro', texto: erroAmigavel(error) } : { tipo: 'ok', texto: `${email} cadastrado. Envie o link do sistema: no primeiro acesso a pessoa cria a senha.` });
+    void carregar();
+    return !error;
+  };
+  const remover = async (m: Membro) => {
+    const { data, error } = await cliente.from('painel_membros').delete().eq('id', m.id).select('id');
+    setMsg(error ? { tipo: 'erro', texto: erroAmigavel(error) } : !data?.length ? { tipo: 'erro', texto: 'Você não tem permissão para remover este acesso.' } : { tipo: 'ok', texto: `Acesso de ${m.email} removido.` });
+    void carregar();
+  };
+  const criarDep = async () => {
+    const nome = novoDep.trim();
+    if (!nome) return;
+    const { error } = await cliente.from('departamentos').insert({ orgao_id: orgao.id, nome });
+    setMsg(error ? { tipo: 'erro', texto: erroAmigavel(error) } : { tipo: 'ok', texto: `Departamento ${nome} criado. Agora cadastre o representante dele.` });
+    if (!error) setNovoDep('');
+    aoMudar();
+  };
+  const excluirDep = async (d: { id: string; nome: string }) => {
+    if (!window.confirm(`Excluir o departamento ${d.nome}? Os representantes dele perdem o acesso.`)) return;
+    const { error } = await cliente.from('departamentos').delete().eq('id', d.id);
+    setMsg(error ? { tipo: 'erro', texto: erroAmigavel(error) } : { tipo: 'ok', texto: `Departamento ${d.nome} excluído.` });
+    aoMudar();
+    void carregar();
+  };
+
+  const gestores = (membros ?? []).filter((m) => m.papel === 'gestor');
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold">Departamentos e acessos</h1>
+        <p className="text-sm text-slate-500">
+          O Departamento de Licitação vê todas as atas. Cada representante vê só as atas do seu departamento. Fiscais e fornecedores são cadastrados dentro de cada ata, em Configuração da Ata.
+        </p>
+      </div>
+      {msg && <p className={`rounded-2xl p-3 text-sm ${msg.tipo === 'erro' ? 'bg-rose-50 text-rose-800' : 'bg-marca-50 text-marca-800'}`}>{msg.texto}</p>}
+
+      {gestor && (
+        <Card>
+          <CardHeader titulo="Departamento de Licitação" subtitulo="Gestores do órgão: veem e editam todas as atas, cadastram departamentos e representantes." icone={<ShieldCheck className="h-4 w-4" />} />
+          <div className="p-5">
+            <ListaDeEmails membros={gestores} meuEmail={meuEmail} remover={(m) => void remover(m)} adicionar={(e) => adicionar(e, 'gestor')} placeholder="email@orgao.gov.br" idCampo="novo-gestor" />
+          </div>
+        </Card>
+      )}
+
+      <div className="grid gap-5 lg:grid-cols-2">
+        {departamentos.map((d) => (
+          <Card key={d.id}>
+            <CardHeader
+              titulo={d.nome}
+              subtitulo={`${contagem.get(d.id) ?? 0} ${(contagem.get(d.id) ?? 0) === 1 ? 'ata' : 'atas'} · representantes do departamento`}
+              icone={<Users className="h-4 w-4" />}
+              acoes={
+                gestor ? (
+                  <button className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600" onClick={() => void excluirDep(d)} aria-label={`Excluir ${d.nome}`} title="Excluir departamento">
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                ) : undefined
+              }
+            />
+            <div className="p-5">
+              <ListaDeEmails
+                membros={(membros ?? []).filter((m) => m.papel === 'departamento' && m.departamento_id === d.id)}
+                meuEmail={meuEmail}
+                remover={(m) => void remover(m)}
+                adicionar={(e) => adicionar(e, 'departamento', d.id)}
+                placeholder="representante@orgao.gov.br"
+                idCampo={`novo-rep-${d.id}`}
+              />
+            </div>
+          </Card>
+        ))}
+        {gestor && (
+          <Card className="border-dashed">
+            <CardHeader titulo="Novo departamento" subtitulo="Ex.: Comunicação, Tecnologia da Informação, Fiscalização" icone={<Network className="h-4 w-4" />} />
+            <div className="flex gap-2 p-5">
+              <input id="novo-departamento" className={`${inputCls} min-w-0 flex-1`} placeholder="Nome do departamento" value={novoDep} onChange={(e) => setNovoDep(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && void criarDep()} />
+              <Botao variante="primario" icone={<Plus className="h-4 w-4" />} disabled={!novoDep.trim()} onClick={() => void criarDep()}>
+                Criar
+              </Botao>
+            </div>
+          </Card>
+        )}
+      </div>
     </div>
   );
 }

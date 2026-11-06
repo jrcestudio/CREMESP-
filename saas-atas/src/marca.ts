@@ -71,6 +71,9 @@ export function paleta(hex: string): Record<number, [number, number, number]> {
 export function aplicarCor(hex: string) {
   const raiz = document.documentElement;
   for (const [k, [r, g, b]] of Object.entries(paleta(hex))) raiz.style.setProperty(`--marca-${k}`, `${r} ${g} ${b}`);
+  // Menu lateral: tom bem escuro da cor do órgão (ex.: verde Cremesp → verde-escuro)
+  const [r, g, bl] = misturar(hexParaRgb(hex), 0, 0.62);
+  raiz.style.setProperty('--sidebar-bg', `${r} ${g} ${bl}`);
 }
 
 export function definirMarca(o: Orgao | null) {

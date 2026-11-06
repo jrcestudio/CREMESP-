@@ -4230,31 +4230,16 @@ export function PainelConta({ email, status, sair }: { email: string; status: St
 export function PainelEquipe({ conexao, meuEmail }: { conexao: Conexao; meuEmail: string }) {
   const cliente = conexao.cliente;
   const tabela = conexao.tabelaMembros;
-  const ataId = conexao.ataId;
-  const [membros, setMembros] = useState<{ email: string; adicionado_por: string | null; papel?: string | null; ata_id?: string }[]>([]);
+  const ataId = conexao.ataId ?? '';
+  const [membros, setMembros] = useState<{ id: number; email: string; adicionado_por: string | null; papel: string }[] | null>(null);
   const [novo, setNovo] = useState('');
-  const [papel, setPapel] = useState<'equipe' | 'fornecedor'>('equipe');
-  const [temPapel, setTemPapel] = useState(true);
+  const [papel, setPapel] = useState<'fiscal' | 'fornecedor'>('fiscal');
   const [msg, setMsg] = useState('');
+  const semPermissao = 'Só o Departamento de Licitação ou o representante do departamento desta ata pode alterar os acessos.';
   const carregar = useCallback(async () => {
-    if (ataId) {
-      // Painel: equipe (vale para todas as atas) e fornecedores desta ata
-      let q = cliente.from(tabela).select('email, adicionado_por, papel, ata_id').in('ata_id', ['todas', ataId]);
-      if (conexao.orgaoId) q = q.eq('orgao_id', conexao.orgaoId);
-      const r = await q.order('email');
-      setMembros(r.data ?? []);
-      return;
-    }
-    const r = await cliente.from(tabela).select('email, adicionado_por, papel').order('email');
-    if (!r.error) {
-      setTemPapel(true);
-      setMembros(r.data ?? []);
-      return;
-    }
-    // Banco ainda sem a coluna "papel" (script do portal do fornecedor não rodado)
-    setTemPapel(false);
-    const { data } = await cliente.from(tabela).select('email, adicionado_por').order('email');
-    setMembros(data ?? []);
+    // Fiscais e fornecedores desta ata (gestores e representantes do departamento já têm acesso)
+    const r = await cliente.from(tabela).select('id, email, adicionado_por, papel').eq('orgao_id', conexao.orgaoId ?? '').eq('ata_id', ataId).order('papel').order('email');
+    setMembros(r.data ?? []);
   }, [cliente, tabela, ataId, conexao.orgaoId]);
   useEffect(() => {
     void carregar();
@@ -4262,75 +4247,59 @@ export function PainelEquipe({ conexao, meuEmail }: { conexao: Conexao; meuEmail
   const adicionar = async () => {
     const e = novo.trim().toLowerCase();
     if (!e.includes('@')) return;
-    if (papel === 'fornecedor' && !temPapel) {
-      setMsg('Para cadastrar fornecedor, rode antes o script supabase/portal-fornecedor.sql no Supabase (veja o guia).');
-      return;
-    }
-    const linha: Record<string, string> = { email: e, adicionado_por: meuEmail };
-    if (papel === 'fornecedor') linha.papel = papel;
-    if (ataId) linha.ata_id = papel === 'fornecedor' ? ataId : 'todas';
-    if (conexao.orgaoId) linha.orgao_id = conexao.orgaoId;
-    const { error } = await cliente.from(tabela).insert(linha);
+    const { error } = await cliente.from(tabela).insert({ email: e, orgao_id: conexao.orgaoId, papel, ata_id: ataId, adicionado_por: meuEmail });
     setMsg(
       error
         ? error.code === '23505'
-          ? 'Esse e-mail já tem acesso.'
-          : `Erro: ${error.message}`
+          ? 'Esse e-mail já tem esse acesso.'
+          : error.code === '42501'
+            ? semPermissao
+            : `Erro: ${error.message}`
         : papel === 'fornecedor'
-          ? `${e} agora acessa o Portal do Fornecedor${ataId ? ' desta ata' : ''}. Use “Copiar convite” na aba Andamento para enviar o link.`
-          : `${e} agora tem acesso${ataId ? ' a todas as atas do painel' : ''}. Envie o link do sistema: no primeiro acesso a pessoa cria a senha.`,
+          ? `${e} agora acessa o Portal do Fornecedor desta ata. Use “Copiar convite” na aba Andamento para enviar o link.`
+          : `${e} agora é fiscal desta ata. Envie o link do sistema: no primeiro acesso a pessoa cria a senha.`,
     );
     if (!error) setNovo('');
     void carregar();
   };
-  const remover = async (e: string, ataDoMembro?: string) => {
-    if (e === meuEmail) {
+  const remover = async (m: { id: number; email: string }) => {
+    if (m.email === meuEmail) {
       setMsg('Você não pode remover o seu próprio acesso.');
       return;
     }
-    let q = cliente.from(tabela).delete().eq('email', e);
-    if (ataId && ataDoMembro) q = q.eq('ata_id', ataDoMembro);
-    if (conexao.orgaoId) q = q.eq('orgao_id', conexao.orgaoId);
-    const { error } = await q;
-    setMsg(error ? `Erro: ${error.message}` : `Acesso de ${e} removido.`);
+    const { data, error } = await cliente.from(tabela).delete().eq('id', m.id).select('id');
+    setMsg(error ? `Erro: ${error.message}` : !data?.length ? semPermissao : `Acesso de ${m.email} removido.`);
     void carregar();
   };
   return (
     <Card>
       <CardHeader
-        titulo="Quem tem acesso"
-        subtitulo={
-          ataId
-            ? 'Equipe edita todas as atas do painel. Fornecedor vê só os eventos desta ata enviados a ele e responde pelo portal.'
-            : 'Equipe edita tudo. Fornecedor só vê os eventos enviados a ele e responde pelo portal.'
-        }
+        titulo="Fiscais e fornecedores desta ata"
+        subtitulo="O Departamento de Licitação e os representantes do departamento já veem esta ata. Fiscal edita só esta ata; fornecedor vê só os eventos enviados a ele, pelo portal."
         icone={<Users className="h-4 w-4" />}
       />
       <div className="grid gap-4 p-5 lg:grid-cols-2">
-        <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
-          {membros.map((m) => (
-            <li key={`${m.email}-${m.ata_id ?? ''}`} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+        <ul className="divide-y divide-slate-100 rounded-xl border border-slate-200">
+          {(membros ?? []).map((m) => (
+            <li key={m.id} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
               <span className="min-w-0 truncate text-slate-800">
                 {m.email}
                 {m.email === meuEmail && <span className="ml-2 text-xs text-slate-400">(você)</span>}
               </span>
               <span className="flex shrink-0 items-center gap-2">
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${
-                    m.papel === 'fornecedor' ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-marca-50 text-marca-800 ring-marca-200'
-                  }`}
-                >
-                  {m.papel === 'fornecedor' ? 'Fornecedor' : 'Equipe'}
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${m.papel === 'fornecedor' ? 'bg-amber-50 text-amber-800 ring-amber-200' : 'bg-marca-50 text-marca-800 ring-marca-200'}`}>
+                  {m.papel === 'fornecedor' ? 'Fornecedor' : 'Fiscal'}
                 </span>
                 {m.email !== meuEmail && (
-                  <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => void remover(m.email, m.ata_id)} aria-label={`Remover ${m.email}`}>
+                  <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => void remover(m)} aria-label={`Remover ${m.email}`}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 )}
               </span>
             </li>
           ))}
-          {membros.length === 0 && <li className="px-3 py-2 text-sm text-slate-500">Carregando…</li>}
+          {membros === null && <li className="px-3 py-2 text-sm text-slate-500">Carregando…</li>}
+          {membros?.length === 0 && <li className="px-3 py-2 text-sm text-slate-500">Nenhum fiscal ou fornecedor cadastrado.</li>}
         </ul>
         <div>
           <div className="flex flex-wrap gap-2">
@@ -4343,8 +4312,8 @@ export function PainelEquipe({ conexao, meuEmail }: { conexao: Conexao; meuEmail
               onChange={(e) => setNovo(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && void adicionar()}
             />
-            <select className={`${inputCls} w-auto`} value={papel} onChange={(e) => setPapel(e.target.value as 'equipe' | 'fornecedor')} aria-label="Tipo de acesso">
-              <option value="equipe">Equipe {identidade.sigla}</option>
+            <select id="papel-membro" className={`${inputCls} w-auto`} value={papel} onChange={(e) => setPapel(e.target.value as 'fiscal' | 'fornecedor')} aria-label="Tipo de acesso">
+              <option value="fiscal">Fiscal da ata</option>
               <option value="fornecedor">Fornecedor</option>
             </select>
             <Botao variante="primario" icone={<Plus className="h-4 w-4" />} onClick={() => void adicionar()} disabled={!novo.includes('@')}>
@@ -4352,15 +4321,7 @@ export function PainelEquipe({ conexao, meuEmail }: { conexao: Conexao; meuEmail
             </Botao>
           </div>
           {msg && <p className="mt-2 text-sm text-slate-600">{msg}</p>}
-          <p className="mt-3 text-xs text-slate-500">
-            Depois de dar acesso, envie o endereço do sistema para a pessoa. No primeiro acesso ela cria a própria senha. O fornecedor entra pelo mesmo link e vê
-            só o Portal do Fornecedor.
-          </p>
-          {!temPapel && (
-            <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">
-              O portal do fornecedor ainda não foi ativado no banco. Rode o script <strong>supabase/portal-fornecedor.sql</strong> no Supabase.
-            </p>
-          )}
+          <p className="mt-3 text-xs text-slate-500">Depois de dar acesso, envie o endereço do sistema para a pessoa. No primeiro acesso ela cria a própria senha.</p>
         </div>
       </div>
     </Card>
