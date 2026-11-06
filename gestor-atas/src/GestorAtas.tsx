@@ -11,6 +11,7 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ClipboardCopy,
   Copy,
@@ -965,7 +966,7 @@ function Dialogo({ config, fechar }: { config: DialogoConfig | null; fechar: () 
 
 // ---------------------------------------------------------------- Aplicação
 
-function AppGestor({
+export function AppGestor({
   base,
   setBase,
   compartilhado = false,
@@ -973,6 +974,8 @@ function AppGestor({
   painelEquipe,
   usuario = 'Equipe',
   cliente = null,
+  marca = MARCA_GESTOR,
+  aoVoltar,
 }: {
   base: Base;
   setBase: Dispatch<SetStateAction<Base>>;
@@ -980,7 +983,11 @@ function AppGestor({
   painelConta?: ReactNode;
   painelEquipe?: ReactNode;
   usuario?: string;
-  cliente?: SupabaseClient | null;
+  cliente?: Conexao | null;
+  /** Nome exibido no topo (Gestor de Atas ou Painel de Atas) */
+  marca?: { titulo: string; subtitulo: string };
+  /** No Painel de Atas: volta para a lista de atas */
+  aoVoltar?: () => void;
 }) {
   const [aba, setAba] = useState<Aba>('dashboard');
   const [eventoSelId, setEventoSelId] = useState<string>(() => {
@@ -1112,11 +1119,18 @@ function AppGestor({
       <aside data-print-hide className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-200 bg-white lg:flex">
         <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-5">
           <img src={iconeCremesp} alt="Cremesp" className="h-10 w-10" />
-          <div>
-            <p className="text-sm font-semibold leading-tight text-slate-900">Gestor de Atas</p>
-            <p className="text-xs text-slate-500">Simulador de Eventos</p>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold leading-tight text-slate-900">{marca.titulo}</p>
+            <p className="truncate text-xs text-slate-500" title={marca.subtitulo}>
+              {marca.subtitulo}
+            </p>
           </div>
         </div>
+        {aoVoltar && (
+          <button onClick={aoVoltar} className="mx-3 mt-3 flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+            <ChevronLeft className="h-4 w-4" /> Todas as atas
+          </button>
+        )}
         <nav className="flex-1 space-y-1 p-3">
           {ABAS.map((a) => (
             <button
@@ -1159,9 +1173,14 @@ function AppGestor({
       {/* Barra superior (celular/tablet) */}
       <header data-print-hide className="sticky top-0 z-30 border-b border-slate-200 bg-white/95 backdrop-blur lg:hidden">
         <div className="flex items-center gap-2 px-4 py-3">
+          {aoVoltar && (
+            <button onClick={aoVoltar} className="rounded p-1 text-slate-500 hover:bg-slate-100" aria-label="Todas as atas" title="Todas as atas">
+              <ChevronLeft className="h-5 w-5" />
+            </button>
+          )}
           <img src={iconeCremesp} alt="Cremesp" className="h-8 w-8" />
           <div className="min-w-0">
-            <p className="text-sm font-semibold leading-tight">Gestor de Atas</p>
+            <p className="text-sm font-semibold leading-tight">{marca.titulo}</p>
             <p className="truncate text-xs text-slate-500">{ata.numero} · {ata.fornecedor}</p>
           </div>
         </div>
@@ -1271,6 +1290,7 @@ function AppGestor({
               abrirDialogo={setDialogo}
               compartilhado={compartilhado}
               painelEquipe={painelEquipe}
+              semExemplo={!!aoVoltar}
               aoRestaurar={(b) => setEventoSelId((b.eventos.find((e) => e.status === 'simulacao') ?? b.eventos[0])?.id ?? '')}
             />
           )}
@@ -2962,7 +2982,7 @@ function AndamentoAba({
   avisar: (t: string, tipo?: 'ok' | 'erro') => void;
   abrirDialogo: (d: DialogoConfig) => void;
   irParaEvento: (id: string, destino: Aba) => void;
-  cliente?: SupabaseClient | null;
+  cliente?: Conexao | null;
 }) {
   const [filtro, setFiltro] = useState<FiltroAndamento>('todos');
   const [grupo, setGrupo] = useState<GrupoEvento>(() => (evento ? grupoEvento(evento) : 'solicitado'));
@@ -3357,6 +3377,7 @@ function ConfigAba({
   aoRestaurar,
   compartilhado,
   painelEquipe,
+  semExemplo = false,
 }: {
   base: Base;
   setBase: Dispatch<SetStateAction<Base>>;
@@ -3366,6 +3387,8 @@ function ConfigAba({
   aoRestaurar: (b: Base) => void;
   compartilhado?: boolean;
   painelEquipe?: ReactNode;
+  /** Painel de Atas: esconde "Restaurar Ata original" (que é a da REDXCORP) */
+  semExemplo?: boolean;
 }) {
   const avisoSetor = compartilhado ? ' A mudança vale para todo o setor.' : '';
   const { ata, modulos, itens, eventos } = base;
@@ -3554,9 +3577,11 @@ function ConfigAba({
               e.target.value = '';
             }}
           />
-          <Botao icone={<RotateCcw className="h-4 w-4" />} onClick={restaurarExemplo}>
-            Restaurar Ata original
-          </Botao>
+          {!semExemplo && (
+            <Botao icone={<RotateCcw className="h-4 w-4" />} onClick={restaurarExemplo}>
+              Restaurar Ata original
+            </Botao>
+          )}
           <Botao variante="perigo" icone={<Trash2 className="h-4 w-4" />} onClick={comecarDoZero}>
             Ata em branco
           </Botao>
@@ -3834,8 +3859,50 @@ const supabase: SupabaseClient | null = SUPABASE_URL && SUPABASE_KEY ? createCli
 
 const chaveRegistro = (c: string, id: string) => `${c}:${id}`;
 
+const MARCA_GESTOR = { titulo: 'Gestor de Atas', subtitulo: 'Simulador de Eventos' };
+
+/**
+ * Onde ficam os dados no Supabase. O Gestor de Atas usa as tabelas originais
+ * (registros, membros, anexos). O Painel de Atas usa tabelas próprias
+ * (painel_...), separadas por ata, sem misturar com o Gestor.
+ */
+export interface Conexao {
+  cliente: SupabaseClient;
+  /** null no Gestor de Atas; id da ata no Painel */
+  ataId: string | null;
+  tabela: string;
+  tabelaMembros: string;
+  bucket: string;
+  /** Prefixo dos caminhos dos anexos ('' ou '<ataId>/') */
+  prefixo: string;
+  rpcFornecedor: string;
+  /** Script do Supabase que ativa os anexos (para mensagens de erro) */
+  scriptAnexos: string;
+}
+
+export function conexaoGestor(cliente: SupabaseClient): Conexao {
+  return { cliente, ataId: null, tabela: 'registros', tabelaMembros: 'membros', bucket: 'anexos', prefixo: '', rpcFornecedor: 'fornecedor_acao', scriptAnexos: 'supabase/anexos.sql' };
+}
+
+export function conexaoPainel(cliente: SupabaseClient, ataId: string): Conexao {
+  return {
+    cliente,
+    ataId,
+    tabela: 'painel_registros',
+    tabelaMembros: 'painel_membros',
+    bucket: 'painel-anexos',
+    prefixo: `${ataId}/`,
+    rpcFornecedor: 'painel_fornecedor_acao',
+    scriptAnexos: 'supabase/painel-configurar.sql',
+  };
+}
+
+/** Linha da tabela, com a coluna ata_id quando é o Painel */
+const linhaBanco = (cx: Conexao, r: Registro) => ({ ...(cx.ataId ? { ata_id: cx.ataId } : {}), colecao: r.colecao, id: r.id, ordem: r.ordem, dados: r.dados });
+/** Ignora alterações em tempo real de outras atas */
+const daMesmaAta = (cx: Conexao, linha: { ata_id?: string } | null | undefined) => !cx.ataId || !linha || !linha.ata_id || linha.ata_id === cx.ataId;
+
 // ----- Anexos (Supabase Storage)
-const BUCKET_ANEXOS = 'anexos';
 
 function nomeSeguro(nome: string): string {
   const limpo = nome
@@ -3846,28 +3913,32 @@ function nomeSeguro(nome: string): string {
   return limpo.slice(-80) || 'arquivo';
 }
 
-async function enviarAnexos(cliente: SupabaseClient, eventoId: string, arquivos: File[]): Promise<Anexo[]> {
+export async function enviarArquivo(cx: Conexao, pasta: string, f: File): Promise<Anexo> {
+  const caminho = `${cx.prefixo}${pasta}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${nomeSeguro(f.name)}`;
+  const { error } = await cx.cliente.storage.from(cx.bucket).upload(caminho, f, { contentType: f.type || 'application/octet-stream', upsert: false });
+  if (error) {
+    throw new Error(
+      /bucket not found/i.test(error.message)
+        ? `O armazenamento de arquivos ainda não foi ativado. Rode o script ${cx.scriptAnexos} no Supabase.`
+        : `Não foi possível enviar "${f.name}": ${error.message}`,
+    );
+  }
+  return { nome: f.name, caminho, tamanho: f.size, tipo: f.type };
+}
+
+async function enviarAnexos(cx: Conexao, eventoId: string, arquivos: File[]): Promise<Anexo[]> {
   const enviados: Anexo[] = [];
   for (const f of arquivos) {
     if (f.size > LIMITE_ANEXO) throw new Error(`"${f.name}" passa de 20 MB.`);
-    const caminho = `eventos/${eventoId}/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}-${nomeSeguro(f.name)}`;
-    const { error } = await cliente.storage.from(BUCKET_ANEXOS).upload(caminho, f, { contentType: f.type || 'application/octet-stream', upsert: false });
-    if (error) {
-      throw new Error(
-        /bucket not found/i.test(error.message)
-          ? 'O armazenamento de anexos ainda não foi ativado. Rode o script supabase/anexos.sql no Supabase.'
-          : `Não foi possível enviar "${f.name}": ${error.message}`,
-      );
-    }
-    enviados.push({ nome: f.name, caminho, tamanho: f.size, tipo: f.type });
+    enviados.push(await enviarArquivo(cx, `eventos/${eventoId}`, f));
   }
   return enviados;
 }
 
-async function abrirAnexoNoNavegador(cliente: SupabaseClient, a: Anexo): Promise<void> {
+export async function abrirAnexoNoNavegador(cx: Conexao, a: Anexo): Promise<void> {
   // Abre a aba antes do await para o navegador não bloquear o pop-up
   const janela = window.open('', '_blank');
-  const { data, error } = await cliente.storage.from(BUCKET_ANEXOS).createSignedUrl(a.caminho, 600);
+  const { data, error } = await cx.cliente.storage.from(cx.bucket).createSignedUrl(a.caminho, 600);
   if (error || !data) {
     janela?.close();
     window.alert(`Não foi possível abrir o anexo. ${error?.message ?? ''}`);
@@ -3911,7 +3982,8 @@ function aplicarRegistro(b: Base, colecao: Colecao, id: string, reg: Registro | 
   return { ...b, [colecao]: nova };
 }
 
-function useSincronizacao(cliente: SupabaseClient, base: Base, setBase: Dispatch<SetStateAction<Base>>, sincronizadoInicial: Map<string, string>) {
+function useSincronizacao(cx: Conexao, base: Base, setBase: Dispatch<SetStateAction<Base>>, sincronizadoInicial: Map<string, string>) {
+  const cliente = cx.cliente;
   const sincronizado = useRef(sincronizadoInicial);
   const baseRef = useRef(base);
   baseRef.current = base;
@@ -3939,13 +4011,15 @@ function useSincronizacao(cliente: SupabaseClient, base: Base, setBase: Dispatch
     setStatus('salvando');
     try {
       if (alterados.length) {
-        const { error } = await cliente.from('registros').upsert(alterados.map((r) => ({ colecao: r.colecao, id: r.id, ordem: r.ordem, dados: r.dados })));
+        const { error } = await cliente.from(cx.tabela).upsert(alterados.map((r) => linhaBanco(cx, r)));
         if (error) throw error;
         for (const r of alterados) sincronizado.current.set(chaveRegistro(r.colecao, r.id), assinatura(r));
       }
       for (const c of new Set(removidos.map((r) => r.colecao))) {
         const ids = removidos.filter((r) => r.colecao === c).map((r) => r.id);
-        const { error } = await cliente.from('registros').delete().eq('colecao', c).in('id', ids);
+        let q = cliente.from(cx.tabela).delete().eq('colecao', c).in('id', ids);
+        if (cx.ataId) q = q.eq('ata_id', cx.ataId);
+        const { error } = await q;
         if (error) throw error;
       }
       for (const r of removidos) sincronizado.current.delete(r.k);
@@ -3960,7 +4034,7 @@ function useSincronizacao(cliente: SupabaseClient, base: Base, setBase: Dispatch
       window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => void enviar(), 5000);
     }
-  }, [cliente]);
+  }, [cliente, cx]);
 
   // Envia as alterações locais pouco depois de cada edição
   useEffect(() => {
@@ -3972,10 +4046,11 @@ function useSincronizacao(cliente: SupabaseClient, base: Base, setBase: Dispatch
   // Recebe as alterações dos colegas em tempo real
   useEffect(() => {
     const canal = cliente
-      .channel('registros-gestor')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'registros' }, (payload) => {
-        const novo = payload.new as Partial<Registro> | null;
-        const antigo = payload.old as Partial<Registro> | null;
+      .channel(`${cx.tabela}-gestor-${cx.ataId ?? 'unica'}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: cx.tabela }, (payload) => {
+        const novo = payload.new as (Partial<Registro> & { ata_id?: string }) | null;
+        const antigo = payload.old as (Partial<Registro> & { ata_id?: string }) | null;
+        if (!daMesmaAta(cx, novo) || !daMesmaAta(cx, antigo)) return;
         const colecao = (novo?.colecao ?? antigo?.colecao) as Colecao | undefined;
         const id = novo?.id ?? antigo?.id;
         if (!colecao || !id) return;
@@ -3997,7 +4072,7 @@ function useSincronizacao(cliente: SupabaseClient, base: Base, setBase: Dispatch
     return () => {
       void cliente.removeChannel(canal);
     };
-  }, [cliente, setBase]);
+  }, [cliente, cx, setBase]);
 
   // Avisa antes de fechar com alterações ainda não enviadas
   useEffect(() => {
@@ -4014,7 +4089,7 @@ function useSincronizacao(cliente: SupabaseClient, base: Base, setBase: Dispatch
   return status;
 }
 
-function TelaCentral({ children }: { children: ReactNode }) {
+export function TelaCentral({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-slate-50 p-4">
       <div className="w-full max-w-sm">
@@ -4027,7 +4102,7 @@ function TelaCentral({ children }: { children: ReactNode }) {
   );
 }
 
-function TelaLogin({ cliente }: { cliente: SupabaseClient }) {
+export function TelaLogin({ cliente, titulo = 'Gestor de Atas · Cremesp' }: { cliente: SupabaseClient; titulo?: string }) {
   const [modo, setModo] = useState<'entrar' | 'criar'>('entrar');
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
@@ -4064,7 +4139,7 @@ function TelaLogin({ cliente }: { cliente: SupabaseClient }) {
 
   return (
     <TelaCentral>
-      <h1 className="text-base font-semibold text-slate-900">Gestor de Atas · Cremesp</h1>
+      <h1 className="text-base font-semibold text-slate-900">{titulo}</h1>
       <p className="mt-0.5 text-xs text-slate-500">Equipe do Cremesp e fornecedores entram por aqui.</p>
       <div className="mt-4 grid grid-cols-2 rounded-lg bg-slate-100 p-1 text-sm font-medium">
         {(['entrar', 'criar'] as const).map((m) => (
@@ -4117,7 +4192,7 @@ function TelaLogin({ cliente }: { cliente: SupabaseClient }) {
   );
 }
 
-function PainelConta({ email, status, sair }: { email: string; status: StatusSync; sair: () => void }) {
+export function PainelConta({ email, status, sair }: { email: string; status: StatusSync; sair: () => void }) {
   const estilo: Record<StatusSync, { txt: string; cls: string; icone: ReactNode }> = {
     sincronizado: { txt: 'Salvo para o setor', cls: 'text-cremesp-700', icone: <Cloud className="h-3.5 w-3.5" /> },
     salvando: { txt: 'Salvando…', cls: 'text-slate-500', icone: <Loader2 className="h-3.5 w-3.5 animate-spin" /> },
@@ -4142,14 +4217,23 @@ function PainelConta({ email, status, sair }: { email: string; status: StatusSyn
   );
 }
 
-function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail: string }) {
-  const [membros, setMembros] = useState<{ email: string; adicionado_por: string | null; papel?: string | null }[]>([]);
+export function PainelEquipe({ conexao, meuEmail }: { conexao: Conexao; meuEmail: string }) {
+  const cliente = conexao.cliente;
+  const tabela = conexao.tabelaMembros;
+  const ataId = conexao.ataId;
+  const [membros, setMembros] = useState<{ email: string; adicionado_por: string | null; papel?: string | null; ata_id?: string }[]>([]);
   const [novo, setNovo] = useState('');
   const [papel, setPapel] = useState<'equipe' | 'fornecedor'>('equipe');
   const [temPapel, setTemPapel] = useState(true);
   const [msg, setMsg] = useState('');
   const carregar = useCallback(async () => {
-    const r = await cliente.from('membros').select('email, adicionado_por, papel').order('email');
+    if (ataId) {
+      // Painel: equipe (vale para todas as atas) e fornecedores desta ata
+      const r = await cliente.from(tabela).select('email, adicionado_por, papel, ata_id').in('ata_id', ['todas', ataId]).order('email');
+      setMembros(r.data ?? []);
+      return;
+    }
+    const r = await cliente.from(tabela).select('email, adicionado_por, papel').order('email');
     if (!r.error) {
       setTemPapel(true);
       setMembros(r.data ?? []);
@@ -4157,9 +4241,9 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
     }
     // Banco ainda sem a coluna "papel" (script do portal do fornecedor não rodado)
     setTemPapel(false);
-    const { data } = await cliente.from('membros').select('email, adicionado_por').order('email');
+    const { data } = await cliente.from(tabela).select('email, adicionado_por').order('email');
     setMembros(data ?? []);
-  }, [cliente]);
+  }, [cliente, tabela, ataId]);
   useEffect(() => {
     void carregar();
   }, [carregar]);
@@ -4172,25 +4256,28 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
     }
     const linha: Record<string, string> = { email: e, adicionado_por: meuEmail };
     if (papel === 'fornecedor') linha.papel = papel;
-    const { error } = await cliente.from('membros').insert(linha);
+    if (ataId) linha.ata_id = papel === 'fornecedor' ? ataId : 'todas';
+    const { error } = await cliente.from(tabela).insert(linha);
     setMsg(
       error
         ? error.code === '23505'
           ? 'Esse e-mail já tem acesso.'
           : `Erro: ${error.message}`
         : papel === 'fornecedor'
-          ? `${e} agora acessa o Portal do Fornecedor. Use “Copiar convite” na aba Andamento para enviar o link.`
-          : `${e} agora tem acesso. Envie o link do sistema: no primeiro acesso a pessoa cria a senha.`,
+          ? `${e} agora acessa o Portal do Fornecedor${ataId ? ' desta ata' : ''}. Use “Copiar convite” na aba Andamento para enviar o link.`
+          : `${e} agora tem acesso${ataId ? ' a todas as atas do painel' : ''}. Envie o link do sistema: no primeiro acesso a pessoa cria a senha.`,
     );
     if (!error) setNovo('');
     void carregar();
   };
-  const remover = async (e: string) => {
+  const remover = async (e: string, ataDoMembro?: string) => {
     if (e === meuEmail) {
       setMsg('Você não pode remover o seu próprio acesso.');
       return;
     }
-    const { error } = await cliente.from('membros').delete().eq('email', e);
+    let q = cliente.from(tabela).delete().eq('email', e);
+    if (ataId && ataDoMembro) q = q.eq('ata_id', ataDoMembro);
+    const { error } = await q;
     setMsg(error ? `Erro: ${error.message}` : `Acesso de ${e} removido.`);
     void carregar();
   };
@@ -4198,13 +4285,17 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
     <Card>
       <CardHeader
         titulo="Quem tem acesso"
-        subtitulo="Equipe edita tudo. Fornecedor só vê os eventos enviados a ele e responde pelo portal."
+        subtitulo={
+          ataId
+            ? 'Equipe edita todas as atas do painel. Fornecedor vê só os eventos desta ata enviados a ele e responde pelo portal.'
+            : 'Equipe edita tudo. Fornecedor só vê os eventos enviados a ele e responde pelo portal.'
+        }
         icone={<Users className="h-4 w-4" />}
       />
       <div className="grid gap-4 p-5 lg:grid-cols-2">
         <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
           {membros.map((m) => (
-            <li key={m.email} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+            <li key={`${m.email}-${m.ata_id ?? ''}`} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
               <span className="min-w-0 truncate text-slate-800">
                 {m.email}
                 {m.email === meuEmail && <span className="ml-2 text-xs text-slate-400">(você)</span>}
@@ -4218,7 +4309,7 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
                   {m.papel === 'fornecedor' ? 'Fornecedor' : 'Equipe'}
                 </span>
                 {m.email !== meuEmail && (
-                  <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => void remover(m.email)} aria-label={`Remover ${m.email}`}>
+                  <button className="rounded p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600" onClick={() => void remover(m.email, m.ata_id)} aria-label={`Remover ${m.email}`}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
                 )}
@@ -4267,7 +4358,20 @@ function PainelEquipe({ cliente, meuEmail }: { cliente: SupabaseClient; meuEmail
 type AcaoFornecedor = 'confirmar' | 'ajuste' | 'mensagem' | 'nota_fiscal';
 const ETAPAS_NOTA_FISCAL: Etapa[] = ['aprovado', 'protocolado', 'os_enviada', 'realizado', 'nota_recebida'];
 
-function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient; email: string; inicial: Base }) {
+export function PortalFornecedor({
+  conexao,
+  email,
+  inicial,
+  aoVoltar,
+  titulo = 'Portal do Fornecedor · Cremesp',
+}: {
+  conexao: Conexao;
+  email: string;
+  inicial: Base;
+  aoVoltar?: () => void;
+  titulo?: string;
+}) {
+  const cliente = conexao.cliente;
   const [base, setBase] = useState<Base>(inicial);
   const [selId, setSelId] = useState<string>('');
   const [texto, setTexto] = useState('');
@@ -4278,16 +4382,17 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
   const [arqNota, setArqNota] = useState<File[]>([]);
   const [abaPortal, setAbaPortal] = useState<'solicitado' | 'realizado'>('solicitado');
   const [enviando, setEnviando] = useState(false);
-  const abrir = (a: Anexo) => void abrirAnexoNoNavegador(cliente, a);
+  const abrir = (a: Anexo) => void abrirAnexoNoNavegador(conexao, a);
   const [aviso, setAviso] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
 
   // Recebe em tempo real o que a equipe do Cremesp altera
   useEffect(() => {
     const canal = cliente
-      .channel('registros-fornecedor')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'registros' }, (payload) => {
-        const novo = payload.new as Partial<Registro> | null;
-        const antigo = payload.old as Partial<Registro> | null;
+      .channel(`${conexao.tabela}-fornecedor-${conexao.ataId ?? 'unica'}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: conexao.tabela }, (payload) => {
+        const novo = payload.new as (Partial<Registro> & { ata_id?: string }) | null;
+        const antigo = payload.old as (Partial<Registro> & { ata_id?: string }) | null;
+        if (!daMesmaAta(conexao, novo) || !daMesmaAta(conexao, antigo)) return;
         const colecao = (novo?.colecao ?? antigo?.colecao) as Colecao | undefined;
         const id = novo?.id ?? antigo?.id;
         if (!colecao || !id) return;
@@ -4298,7 +4403,7 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
     return () => {
       void cliente.removeChannel(canal);
     };
-  }, [cliente]);
+  }, [cliente, conexao]);
 
   const { ata, itens, modulos } = base;
   const eventos = useMemo(() => base.eventos.filter((e) => etapaDe(e) !== 'rascunho'), [base.eventos]);
@@ -4378,15 +4483,16 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
     setAviso(null);
     let anexos: Anexo[] = [];
     try {
-      anexos = await enviarAnexos(cliente, evento.id, arquivos);
+      anexos = await enviarAnexos(conexao, evento.id, arquivos);
     } catch (err) {
       setEnviando(false);
       setAviso({ tipo: 'erro', texto: err instanceof Error ? err.message : String(err) });
       return;
     }
     const params: Record<string, unknown> = { p_evento: evento.id, p_acao: acao, p_mensagem: conteudo };
+    if (conexao.ataId) params.p_ata = conexao.ataId;
     if (anexos.length) params.p_anexos = anexos;
-    const { data, error } = await cliente.rpc('fornecedor_acao', params);
+    const { data, error } = await cliente.rpc(conexao.rpcFornecedor, params);
     setEnviando(false);
     if (error) {
       setAviso({ tipo: 'erro', texto: `Não foi possível enviar. ${error.message}` });
@@ -4447,9 +4553,14 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
       <header data-print-hide className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-[1300px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
           <div className="flex items-center gap-3">
+            {aoVoltar && (
+              <button onClick={aoVoltar} className="rounded p-1 text-slate-500 hover:bg-slate-100" aria-label="Todas as atas" title="Todas as atas">
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+            )}
             <img src={iconeCremesp} alt="Cremesp" className="h-9 w-9" />
             <div>
-              <p className="text-sm font-semibold leading-tight">Portal do Fornecedor · Cremesp</p>
+              <p className="text-sm font-semibold leading-tight">{titulo}</p>
               <p className="text-xs text-slate-500">
                 {ata.numero} · {ata.fornecedor}
               </p>
@@ -4670,9 +4781,24 @@ function PortalFornecedor({ cliente, email, inicial }: { cliente: SupabaseClient
   );
 }
 
-function AppCompartilhado({ cliente, sessao, inicial, sincronizadoInicial }: { cliente: SupabaseClient; sessao: Session; inicial: Base; sincronizadoInicial: Map<string, string> }) {
+export function AppCompartilhado({
+  conexao,
+  sessao,
+  inicial,
+  sincronizadoInicial,
+  marca,
+  aoVoltar,
+}: {
+  conexao: Conexao;
+  sessao: Session;
+  inicial: Base;
+  sincronizadoInicial: Map<string, string>;
+  marca?: { titulo: string; subtitulo: string };
+  aoVoltar?: () => void;
+}) {
+  const cliente = conexao.cliente;
   const [base, setBase] = useState<Base>(inicial);
-  const status = useSincronizacao(cliente, base, setBase, sincronizadoInicial);
+  const status = useSincronizacao(conexao, base, setBase, sincronizadoInicial);
   const email = sessao.user.email ?? '';
   return (
     <AppGestor
@@ -4680,14 +4806,17 @@ function AppCompartilhado({ cliente, sessao, inicial, sincronizadoInicial }: { c
       setBase={setBase}
       compartilhado
       painelConta={<PainelConta email={email} status={status} sair={() => void cliente.auth.signOut()} />}
-      painelEquipe={<PainelEquipe cliente={cliente} meuEmail={email.toLowerCase()} />}
+      painelEquipe={<PainelEquipe conexao={conexao} meuEmail={email.toLowerCase()} />}
       usuario={email}
-      cliente={cliente}
+      cliente={conexao}
+      marca={marca}
+      aoVoltar={aoVoltar}
     />
   );
 }
 
 function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
+  const conexao = useMemo(() => conexaoGestor(cliente), [cliente]);
   const [sessao, setSessao] = useState<Session | null | undefined>(undefined);
   const [carga, setCarga] = useState<
     | { tipo: 'carregando' }
@@ -4756,8 +4885,8 @@ function ModoCompartilhado({ cliente }: { cliente: SupabaseClient }) {
     );
   }
   if (!sessao) return <TelaLogin cliente={cliente} />;
-  if (carga.tipo === 'pronto' && carga.papel === 'fornecedor') return <PortalFornecedor cliente={cliente} email={sessao.user.email ?? ''} inicial={carga.base} />;
-  if (carga.tipo === 'pronto') return <AppCompartilhado cliente={cliente} sessao={sessao} inicial={carga.base} sincronizadoInicial={carga.sinc} />;
+  if (carga.tipo === 'pronto' && carga.papel === 'fornecedor') return <PortalFornecedor conexao={conexao} email={sessao.user.email ?? ''} inicial={carga.base} />;
+  if (carga.tipo === 'pronto') return <AppCompartilhado conexao={conexao} sessao={sessao} inicial={carga.base} sincronizadoInicial={carga.sinc} />;
   return (
     <TelaCentral>
       {carga.tipo === 'carregando' && (
@@ -4808,3 +4937,32 @@ function ModoLocal() {
 export default function GestorAtas() {
   return supabase ? <ModoCompartilhado cliente={supabase} /> : <ModoLocal />;
 }
+
+// ---------------------------------------------------------------- Peças usadas pelo Painel de Atas (src/Painel.tsx)
+
+export type { AtaInfo, Base, Colecao, ItemAta, Modulo, Registro, Unidade, Anexo };
+export {
+  UNIDADES,
+  LISTA_CORES,
+  supabase,
+  criarBaseVazia,
+  normalizarBase,
+  baseParaRegistros,
+  registrosParaBase,
+  chaveRegistro,
+  assinatura,
+  linhaBanco,
+  calcularUsoPorEvento,
+  calcularUsoTotal,
+  grupoEvento,
+  uid,
+  brl,
+  fmtNum,
+  fmtData,
+  hojeISO,
+  Botao,
+  Card,
+  CardHeader,
+  Campo,
+  inputCls,
+};
