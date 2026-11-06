@@ -70,3 +70,10 @@ Na Vercel: *Add New > Project*, escolha este repositório e, em **Root Directory
 O preset **Vite** é detectado sozinho.
 
 O arquivo `dist-single/index.html` também pode ser aberto direto no navegador, sem instalar nada.
+
+## Painel de Atas (sistema separado)
+
+O mesmo código também publica o **Painel de Atas**: uma página inicial onde o setor anexa qualquer Ata de Registro
+de Preços (PDF + arquivo de dados .json gerado a partir dela), confere os dados e cada ata vira um sistema completo
+como este. Ele usa tabelas próprias no Supabase (`painel_...`) e é publicado como outro projeto na Vercel,
+com `VITE_MODO=painel`. Passo a passo em [PAINEL-DE-ATAS.md](PAINEL-DE-ATAS.md).
