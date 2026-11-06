@@ -676,7 +676,7 @@ function totalEvento(ev: Evento, itensPorId: Map<string, ItemAta>): number {
 
 function Card({ children, className = '', ...resto }: { children: ReactNode; className?: string } & HTMLAttributes<HTMLDivElement> & { 'data-print-hide'?: boolean }) {
   return (
-    <div {...resto} className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}>
+    <div {...resto} className={`rounded-2xl border border-slate-200/70 bg-white shadow-suave ${className}`}>
       {children}
     </div>
   );
@@ -686,7 +686,7 @@ function CardHeader({ titulo, subtitulo, icone, acoes }: { titulo: string; subti
   return (
     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 px-5 py-4">
       <div className="flex items-start gap-3">
-        {icone && <div className="mt-0.5 rounded-lg bg-marca-50 p-2 text-marca-700">{icone}</div>}
+        {icone && <div className="mt-0.5 rounded-xl bg-marca-50 p-2 text-marca-700">{icone}</div>}
         <div>
           <h3 className="text-sm font-semibold text-slate-900">{titulo}</h3>
           {subtitulo && <p className="mt-0.5 text-xs text-slate-500">{subtitulo}</p>}
@@ -731,7 +731,7 @@ function Botao({
       onClick={onClick}
       disabled={disabled}
       title={title}
-      className={`inline-flex items-center justify-center gap-2 rounded-lg font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${tam} ${estilos[variante]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-xl font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${tam} ${estilos[variante]} ${className}`}
     >
       {icone}
       {children}
@@ -749,7 +749,7 @@ function Campo({ rotulo, children, className = '' }: { rotulo: string; children:
 }
 
 const inputCls =
-  'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-marca-500 focus:outline-none focus:ring-2 focus:ring-marca-500/20 disabled:bg-slate-50 disabled:text-slate-500';
+  'w-full rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-marca-500 focus:outline-none focus:ring-2 focus:ring-marca-500/20 disabled:bg-slate-50 disabled:text-slate-500';
 const inputSmCls =
   'w-full rounded-md border border-slate-300 bg-white px-2 py-1 text-sm text-slate-900 focus:border-marca-500 focus:outline-none focus:ring-2 focus:ring-marca-500/20 disabled:bg-slate-50 disabled:text-slate-500';
 
@@ -1119,22 +1119,22 @@ export function AppGestor({
   const vigenciaVencida = ata.vigenciaFim ? ata.vigenciaFim < hojeISO() : false;
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+    <div className="min-h-screen bg-gelo text-slate-900 antialiased">
       <style>{CSS_IMPRESSAO}</style>
 
       {/* Barra lateral (desktop) */}
-      <aside data-print-hide className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col border-r border-slate-200 bg-white lg:flex">
-        <div className="flex items-center gap-3 border-b border-slate-100 px-5 py-5">
-          <img src={identidade.icone} alt={identidade.sigla} className="object-contain h-10 w-10" />
+      <aside data-print-hide className="fixed inset-y-0 left-0 z-30 hidden w-64 flex-col overflow-y-auto bg-sidebar text-slate-300 lg:flex">
+        <div className="flex items-center gap-3 px-5 py-6">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white p-1"><img src={identidade.icone} alt={identidade.sigla} className="object-contain h-9 w-9" /></span>
           <div className="min-w-0">
-            <p className="text-sm font-semibold leading-tight text-slate-900">{marca.titulo}</p>
-            <p className="truncate text-xs text-slate-500" title={marca.subtitulo}>
+            <p className="text-sm font-semibold leading-tight text-white">{marca.titulo}</p>
+            <p className="truncate text-xs text-slate-400" title={marca.subtitulo}>
               {marca.subtitulo}
             </p>
           </div>
         </div>
         {aoVoltar && (
-          <button onClick={aoVoltar} className="mx-3 mt-3 flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">
+          <button onClick={aoVoltar} className="mx-3 flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2.5 text-sm font-medium text-slate-200 hover:bg-white/10">
             <ChevronLeft className="h-4 w-4" /> Todas as atas
           </button>
         )}
@@ -1143,17 +1143,17 @@ export function AppGestor({
             <button
               key={a.id}
               onClick={() => setAba(a.id)}
-              className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                aba === a.id ? 'bg-marca-50 text-marca-800' : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+              className={`flex w-full items-center gap-3 rounded-2xl px-3.5 py-3 text-sm font-medium transition ${
+                aba === a.id ? 'bg-white/[0.12] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]' : 'text-slate-300 hover:bg-white/5 hover:text-white'
               }`}
             >
-              <span className={aba === a.id ? 'text-marca-700' : 'text-slate-400'}>{a.icone}</span>
+              <span className={aba === a.id ? 'text-white' : 'text-slate-400'}>{a.icone}</span>
               {a.rotulo}
             </button>
           ))}
         </nav>
         {painelConta && <div className="mx-3">{painelConta}</div>}
-        <div className="m-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs">
+        <div className="m-3 rounded-2xl bg-white p-3 text-xs">
           <p className="font-semibold text-slate-800">{ata.numero || 'Ata sem número'}</p>
           <p className="mt-0.5 line-clamp-2 text-slate-500">{ata.fornecedor || 'Fornecedor não informado'}</p>
           {ata.vigenciaFim && (
@@ -4562,7 +4562,7 @@ export function PortalFornecedor({
   );
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+    <div className="min-h-screen bg-gelo text-slate-900 antialiased">
       <style>{CSS_IMPRESSAO}</style>
       <header data-print-hide className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-[1300px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6">
@@ -4954,7 +4954,7 @@ export default function GestorAtas() {
 
 // ---------------------------------------------------------------- Peças usadas pelo Painel de Atas (src/Painel.tsx)
 
-export type { AtaInfo, Base, Colecao, ItemAta, Modulo, Registro, Unidade, Anexo };
+export type { AtaInfo, Base, Colecao, Evento, ItemAta, Modulo, Registro, Unidade, Anexo };
 export {
   UNIDADES,
   LISTA_CORES,
@@ -4969,6 +4969,7 @@ export {
   calcularUsoPorEvento,
   calcularUsoTotal,
   grupoEvento,
+  etapaDe,
   uid,
   brl,
   fmtNum,

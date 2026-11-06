@@ -8,7 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
-import { AlertTriangle, ArrowLeftRight, ArrowRight, Building2, CalendarDays, FileText, History, Loader2, LogOut, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, ArrowRight, Bell, Building2, FilePlus2, FileText, History, LayoutDashboard, Loader2, LogOut, Plus, Search, ShieldCheck, Trash2, Upload, X } from 'lucide-react';
 import { PRODUTO, definirMarca, marca } from './marca';
 import type { Orgao } from './marca';
 import { DadosOrgao, Historico, Plataforma } from './Plataforma';
@@ -32,8 +32,8 @@ import {
   chaveRegistro,
   conexaoPainel,
   criarBaseVazia,
+  etapaDe,
   enviarArquivo,
-  fmtData,
   fmtNum,
   grupoEvento,
   hojeISO,
@@ -43,7 +43,7 @@ import {
   registrosParaBase,
   supabase,
 } from './GestorAtas';
-import type { Anexo, AtaInfo, Base, ItemAta, Modulo, Registro, Unidade } from './GestorAtas';
+import type { Anexo, AtaInfo, Base, Evento, ItemAta, Modulo, Registro, Unidade } from './GestorAtas';
 
 const LIMITE_ATA = 30 * 1024 * 1024;
 
@@ -186,64 +186,6 @@ function Topo({ email, sair, children }: { email: string; sair: () => void; chil
         </div>
       </div>
     </header>
-  );
-}
-
-function CartaoAta({ linha, base, abrir, verArquivo, excluir }: { linha: LinhaAta; base: Base | undefined; abrir: () => void; verArquivo?: () => void; excluir?: () => void }) {
-  const ata = base?.ata;
-  const r = base ? resumoAta(base) : null;
-  const usado = r && r.total ? (r.utilizado / r.total) * 100 : 0;
-  const vencida = ata?.vigenciaFim ? ata.vigenciaFim < hojeISO() : false;
-  return (
-    <Card className="flex flex-col">
-      <div className="flex-1 p-5">
-        <div className="flex items-start justify-between gap-2">
-          <span className="rounded-full bg-marca-50 px-2 py-0.5 text-[11px] font-medium text-marca-800 ring-1 ring-inset ring-marca-200">{linha.setor || 'Setor não informado'}</span>
-          {excluir && (
-            <button onClick={excluir} className="rounded p-1 text-slate-300 hover:bg-rose-50 hover:text-rose-600" aria-label={`Excluir ${linha.servico}`} title="Excluir ata do painel">
-              <Trash2 className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-        <h3 className="mt-2 text-base font-semibold text-slate-900">{linha.servico || ata?.objeto || 'Serviço não informado'}</h3>
-        <p className="mt-0.5 text-sm text-slate-600">{ata?.numero || 'Ata sem número'}</p>
-        <p className="line-clamp-1 text-sm text-slate-500">{ata?.fornecedor || 'Fornecedor não informado'}</p>
-        {ata?.vigenciaFim && (
-          <p className={`mt-2 flex items-center gap-1 text-xs font-medium ${vencida ? 'text-rose-700' : 'text-slate-600'}`}>
-            <CalendarDays className="h-3.5 w-3.5" />
-            {vencida ? `Vigência encerrada em ${fmtData(ata.vigenciaFim)}` : `Vigente até ${fmtData(ata.vigenciaFim)}`}
-          </p>
-        )}
-        {r && (
-          <div className="mt-4 space-y-2">
-            <div className="flex justify-between text-xs text-slate-500">
-              <span>Utilizado</span>
-              <span className="font-medium text-slate-700">
-                {brl(r.utilizado)} de {brl(r.total)}
-              </span>
-            </div>
-            <div className="h-2 overflow-hidden rounded-full bg-slate-100">
-              <div className="h-full rounded-full bg-marca-600" style={{ width: `${Math.min(100, usado)}%` }} />
-            </div>
-            <p className="text-xs text-slate-500">
-              {base!.itens.length} itens · {r.ativos} {r.ativos === 1 ? 'evento em andamento' : 'eventos em andamento'} · {r.realizados} realizados
-            </p>
-          </div>
-        )}
-      </div>
-      <div className="flex items-center justify-between gap-2 border-t border-slate-100 px-5 py-3">
-        {verArquivo ? (
-          <button onClick={verArquivo} className="flex items-center gap-1 text-xs font-medium text-slate-500 hover:text-marca-700">
-            <FileText className="h-3.5 w-3.5" /> Ver ata original
-          </button>
-        ) : (
-          <span />
-        )}
-        <Botao variante="primario" tamanho="sm" onClick={abrir}>
-          Abrir <ArrowRight className="h-3.5 w-3.5" />
-        </Botao>
-      </div>
-    </Card>
   );
 }
 
@@ -636,6 +578,105 @@ function AtaAberta({ cliente, sessao, linha, papel, aoVoltar }: { cliente: Supab
   );
 }
 
+// ---------------------------------------------------------------- Peças da página inicial
+
+const MESES = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+/** Etapas em que o evento espera uma ação da equipe do órgão */
+const ETAPAS_COM_EQUIPE = new Set(['revisado_fornecedor', 'ajuste_solicitado', 'aguardando_diretoria', 'realizado', 'nota_recebida']);
+
+const primeiroNome = (email: string) => {
+  const p = email.split('@')[0].split(/[._-]/)[0] ?? '';
+  return p ? p[0].toUpperCase() + p.slice(1) : '';
+};
+const iniciais = (texto: string) => {
+  const partes = texto.split('@')[0].split(/[\s._-]+/).filter(Boolean);
+  return ((partes[0]?.[0] ?? '') + (partes[1]?.[0] ?? partes[0]?.[1] ?? '')).toUpperCase() || '?';
+};
+const saudacaoDoDia = () => {
+  const h = new Date().getHours();
+  return h < 12 ? 'Bom dia' : h < 18 ? 'Boa tarde' : 'Boa noite';
+};
+const dataDeHoje = () => {
+  const t = new Date().toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' });
+  return t.charAt(0).toUpperCase() + t.slice(1);
+};
+
+const CORES_RESUMO = {
+  azul: 'from-[#4a7bff] to-[#3b6cf6] shadow-[0_12px_28px_-10px_rgba(59,108,246,0.55)]',
+  roxo: 'from-[#9064ff] to-[#7a4df2] shadow-[0_12px_28px_-10px_rgba(122,77,242,0.55)]',
+  verde: 'from-[#26cbbf] to-[#12b3a8] shadow-[0_12px_28px_-10px_rgba(18,179,168,0.55)]',
+};
+
+function CardResumo({ cor, titulo, emoji, numero, detalhe }: { cor: keyof typeof CORES_RESUMO; titulo: string; emoji: string; numero: number; detalhe: string }) {
+  return (
+    <article className={`flex flex-col gap-3.5 rounded-[20px] bg-gradient-to-br p-5 text-white transition hover:-translate-y-1 ${CORES_RESUMO[cor]}`}>
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-medium opacity-90">{titulo}</h3>
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-white/20 text-lg" aria-hidden="true">
+          {emoji}
+        </span>
+      </div>
+      <p className="text-[38px] font-bold leading-none tabular-nums">{numero}</p>
+      <p className="text-xs opacity-85">{detalhe}</p>
+    </article>
+  );
+}
+
+const CORES_AVATAR = ['bg-blue-500', 'bg-violet-500', 'bg-teal-500', 'bg-coral', 'bg-amber-500'];
+
+function LinhaDeAta({ linha, base, hoje, abrir, verArquivo, excluir }: { linha: LinhaAta; base: Base | undefined; hoje: string; abrir: () => void; verArquivo?: () => void; excluir?: () => void }) {
+  const ata = base?.ata;
+  const r = base ? resumoAta(base) : null;
+  const usado = r && r.total ? Math.round((r.utilizado / r.total) * 100) : 0;
+  const fim = ata?.vigenciaFim ?? '';
+  const dias = fim ? Math.round((Date.parse(fim) - Date.parse(hoje)) / 86_400_000) : null;
+  const badge =
+    dias === null
+      ? { txt: 'Sem vigência', cls: 'bg-blue-50 text-blue-700' }
+      : dias < 0
+        ? { txt: 'Encerrada', cls: 'bg-slate-100 text-slate-600' }
+        : dias <= 60
+          ? { txt: `Vence em ${dias} ${dias === 1 ? 'dia' : 'dias'}`, cls: 'bg-amber-50 text-amber-800' }
+          : { txt: 'Vigente', cls: 'bg-emerald-50 text-emerald-700' };
+  const pessoas = [ata?.fornecedor, ata?.gestor, ata?.fiscal].filter((x): x is string => !!x && x.trim() !== '');
+  return (
+    <article className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-4 gap-y-2 rounded-[18px] bg-white px-5 py-4 shadow-suave sm:grid-cols-[auto_minmax(0,1fr)_auto_auto_auto]">
+      <button onClick={abrir} className="grid h-12 w-12 place-items-center rounded-2xl bg-gelo text-xl" aria-label={`Abrir ${linha.servico}`}>
+        📄
+      </button>
+      <button onClick={abrir} className="min-w-0 text-left">
+        <strong className="block truncate font-semibold">{linha.servico || ata?.objeto || 'Serviço não informado'}</strong>
+        <span className="block truncate text-xs text-slate-500">
+          {[linha.setor, ata?.numero, r ? `${usado}% utilizado` : ''].filter(Boolean).join(' · ')}
+        </span>
+      </button>
+      <div className="col-start-2 flex sm:col-start-auto" aria-label={pessoas.join(', ')}>
+        {pessoas.slice(0, 3).map((p, i) => (
+          <span key={i} title={p} className={`-ml-2 grid h-[30px] w-[30px] place-items-center rounded-full border-2 border-white text-[11px] font-semibold text-white first:ml-0 ${CORES_AVATAR[i % CORES_AVATAR.length]}`}>
+            {iniciais(p)}
+          </span>
+        ))}
+      </div>
+      <span className={`col-start-2 justify-self-start whitespace-nowrap rounded-full px-3 py-1.5 text-xs font-semibold sm:col-start-auto ${badge.cls}`}>{badge.txt}</span>
+      <div className="col-start-2 flex items-center gap-1 sm:col-start-auto">
+        {verArquivo && (
+          <button onClick={verArquivo} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="Ver ata original" aria-label="Ver ata original">
+            <FileText className="h-4 w-4" />
+          </button>
+        )}
+        {excluir && (
+          <button onClick={excluir} className="rounded-lg p-1.5 text-slate-300 hover:bg-rose-50 hover:text-rose-600" title="Excluir ata" aria-label={`Excluir ${linha.servico}`}>
+            <Trash2 className="h-4 w-4" />
+          </button>
+        )}
+        <Botao variante="primario" tamanho="sm" onClick={abrir}>
+          Abrir <ArrowRight className="h-3.5 w-3.5" />
+        </Botao>
+      </div>
+    </article>
+  );
+}
+
 // ---------------------------------------------------------------- Página inicial
 
 const ataDaUrl = () => new URLSearchParams(window.location.hash.slice(1)).get('ata') ?? '';
@@ -651,6 +692,8 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
   const [rascunho, setRascunho] = useState<Rascunho | null>(null);
   const [busca, setBusca] = useState('');
   const [tela, setTela] = useState<'atas' | 'orgao' | 'historico'>('atas');
+  const [mostrarNova, setMostrarNova] = useState(false);
+  const refNova = useRef<HTMLDivElement>(null);
   const email = sessao.user.email ?? '';
   const sair = () => void cliente.auth.signOut();
 
@@ -744,30 +787,123 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
     return `${l.setor} ${l.servico} ${a?.numero ?? ''} ${a?.fornecedor ?? ''} ${a?.objeto ?? ''}`.toLowerCase().includes(q);
   });
   const setores = new Set((atas ?? []).map((l) => l.setor).filter(Boolean));
+  const hoje = hojeISO();
+
+  // Números do topo e próximos eventos, de todas as atas do órgão
+  let vigentes = 0;
+  let emAndamento = 0;
+  let pendentes = 0;
+  const proximos: { ataId: string; servico: string; ev: Evento }[] = [];
+  for (const l of atas ?? []) {
+    const b = bases.get(l.id);
+    if (!b) continue;
+    if (!b.ata.vigenciaFim || b.ata.vigenciaFim >= hoje) vigentes += 1;
+    for (const ev of b.eventos) {
+      const etapa = etapaDe(ev);
+      if (grupoEvento(ev) === 'solicitado') emAndamento += 1;
+      if (ETAPAS_COM_EQUIPE.has(etapa)) pendentes += 1;
+      if (etapa !== 'cancelado' && ev.dataInicio && ev.dataInicio >= hoje) proximos.push({ ataId: l.id, servico: l.servico || b.ata.numero, ev });
+    }
+  }
+  proximos.sort((a, b) => a.ev.dataInicio.localeCompare(b.ev.dataInicio));
+
+  const nomeUsuario = primeiroNome(email);
+  const navegar = (t: typeof tela) => {
+    setTela(t);
+    setRascunho(null);
+  };
+  const itensMenu: { id: typeof tela; rotulo: string; icone: ReactNode }[] = [
+    { id: 'atas', rotulo: acesso.equipe ? 'Painel' : 'Suas atas', icone: <LayoutDashboard className="h-5 w-5" /> },
+    ...(acesso.equipe
+      ? [
+          { id: 'orgao' as const, rotulo: 'Dados do órgão', icone: <Building2 className="h-5 w-5" /> },
+          { id: 'historico' as const, rotulo: 'Histórico', icone: <History className="h-5 w-5" /> },
+        ]
+      : []),
+  ];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
-      <Topo email={email} sair={sair}>
-        {acesso.equipe && (
-          <>
-            <Botao tamanho="sm" variante={tela === 'atas' ? 'primario' : 'secundario'} onClick={() => setTela('atas')}>
-              Atas
-            </Botao>
-            <Botao tamanho="sm" variante={tela === 'orgao' ? 'primario' : 'secundario'} icone={<Building2 className="h-3.5 w-3.5" />} onClick={() => setTela('orgao')}>
-              Dados do órgão
-            </Botao>
-            <Botao tamanho="sm" variante={tela === 'historico' ? 'primario' : 'secundario'} icone={<History className="h-3.5 w-3.5" />} onClick={() => setTela('historico')}>
-              Histórico
-            </Botao>
-          </>
-        )}
-        {trocarOrgao && (
-          <Botao tamanho="sm" icone={<ArrowLeftRight className="h-3.5 w-3.5" />} onClick={trocarOrgao}>
-            Trocar órgão
-          </Botao>
-        )}
-      </Topo>
-      <main className="mx-auto max-w-[1200px] space-y-6 px-4 py-6 sm:px-6">
+    <div className="min-h-screen bg-gelo text-slate-900 antialiased lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
+      {/* 1. Menu lateral */}
+      <aside className="flex flex-col gap-4 bg-sidebar px-4 py-4 text-slate-300 lg:sticky lg:top-0 lg:h-screen lg:gap-8 lg:px-[18px] lg:py-7">
+        <div className="flex items-center gap-3 px-1 lg:px-2.5">
+          <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-white p-1">
+            <img src={marca.icone} alt={marca.sigla} className="h-9 w-9 object-contain" />
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-base font-bold leading-tight text-white">{marca.sigla}</p>
+            <p className="truncate text-xs text-slate-400">{PRODUTO}</p>
+          </div>
+        </div>
+        <nav className="flex gap-1.5 overflow-x-auto lg:flex-col">
+          {itensMenu.map((m) => (
+            <button
+              key={m.id}
+              onClick={() => navegar(m.id)}
+              aria-current={tela === m.id ? 'page' : undefined}
+              className={`flex shrink-0 items-center gap-3 whitespace-nowrap rounded-2xl px-3.5 py-3 text-sm font-medium transition ${
+                tela === m.id ? 'bg-white/[0.12] text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]' : 'text-slate-300 hover:bg-white/5 hover:text-white'
+              }`}
+            >
+              {m.icone}
+              {m.rotulo}
+            </button>
+          ))}
+          {trocarOrgao && (
+            <button onClick={trocarOrgao} className="flex shrink-0 items-center gap-3 whitespace-nowrap rounded-2xl px-3.5 py-3 text-sm font-medium text-slate-300 hover:bg-white/5 hover:text-white">
+              <ArrowLeftRight className="h-5 w-5" /> Trocar órgão
+            </button>
+          )}
+        </nav>
+        <div className="mt-auto hidden rounded-2xl bg-white/[0.06] p-3.5 text-xs lg:block">
+          <p className="text-[13px] font-semibold text-white">{marca.nome || marca.sigla}</p>
+          <p className="mt-0.5">
+            {atas?.length ?? 0} {atas?.length === 1 ? 'ata' : 'atas'}
+            {setores.size ? ` · ${setores.size} ${setores.size === 1 ? 'setor' : 'setores'}` : ''}
+          </p>
+          <button onClick={sair} className="mt-3 flex items-center gap-1.5 font-medium text-slate-300 hover:text-white">
+            <LogOut className="h-3.5 w-3.5" /> Sair
+          </button>
+        </div>
+      </aside>
+
+      <div className="min-w-0 space-y-7 px-4 pb-10 pt-6 sm:px-7">
+        {/* 2. Cabeçalho */}
+        <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-4 lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:gap-6">
+          <div className="min-w-0">
+            <h1 className="text-xl font-semibold sm:text-[22px]">
+              Olá{nomeUsuario ? `, ${nomeUsuario}` : ''}! {saudacaoDoDia()} 👋
+            </h1>
+            <p className="text-[13px] text-slate-500">
+              {dataDeHoje()}
+              {acesso.equipe && pendentes > 0 ? ` · ${pendentes} ${pendentes === 1 ? 'evento aguarda' : 'eventos aguardam'} a equipe` : ''}
+            </p>
+          </div>
+          <label className="relative col-span-2 row-start-2 w-full lg:col-span-1 lg:row-start-auto lg:max-w-[440px] lg:justify-self-center">
+            <Search className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-slate-400" />
+            <input
+              id="busca-atas"
+              type="search"
+              className="w-full rounded-full border border-slate-200 bg-white py-3 pl-11 pr-5 text-sm shadow-suave placeholder:text-slate-400 focus:border-marca-500 focus:outline-none focus:ring-2 focus:ring-marca-500/20"
+              placeholder="Buscar ata, setor ou fornecedor"
+              value={busca}
+              onChange={(e) => {
+                setBusca(e.target.value);
+                if (tela !== 'atas') navegar('atas');
+              }}
+            />
+          </label>
+          <div className="flex items-center gap-3">
+            <span className="relative grid h-11 w-11 place-items-center rounded-2xl bg-white shadow-suave" title={pendentes ? `${pendentes} pendências da equipe` : 'Nenhuma pendência'}>
+              <Bell className="h-5 w-5 text-slate-700" />
+              {pendentes > 0 && <span className="absolute right-2.5 top-2.5 h-2.5 w-2.5 rounded-full border-2 border-white bg-coral" />}
+            </span>
+            <span className="grid h-11 w-11 place-items-center rounded-full bg-gradient-to-br from-coral to-violet-600 text-sm font-semibold text-white shadow-suave" title={email}>
+              {iniciais(email)}
+            </span>
+          </div>
+        </header>
+
         {tela === 'orgao' && acesso.equipe ? (
           <DadosOrgao cliente={cliente} orgao={orgao} />
         ) : tela === 'historico' && acesso.equipe ? (
@@ -775,47 +911,107 @@ function Inicio({ cliente, sessao, acesso, orgao, trocarOrgao }: { cliente: Supa
         ) : rascunho ? (
           <Revisao rascunho={rascunho} criar={criar} cancelar={() => setRascunho(null)} />
         ) : (
-          <>
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <h1 className="text-xl font-semibold text-slate-900">{acesso.equipe ? 'Atas do painel' : 'Suas atas'}</h1>
-                <p className="text-sm text-slate-500">
-                  {atas === null
-                    ? 'Carregando…'
-                    : `${atas.length} ${atas.length === 1 ? 'ata' : 'atas'}${setores.size ? ` · ${setores.size} ${setores.size === 1 ? 'setor' : 'setores'}` : ''}. Cada ata tem o próprio sistema de saldos, eventos e portal do fornecedor.`}
-                </p>
-              </div>
-              {(atas?.length ?? 0) > 3 && (
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-slate-400" />
-                  <input className={`${inputCls} w-64 pl-8`} placeholder="Buscar setor, serviço ou fornecedor" value={busca} onChange={(e) => setBusca(e.target.value)} />
+          <div className="grid items-start gap-7 xl:grid-cols-[minmax(0,1fr)_300px]">
+            <div className="min-w-0 space-y-7">
+              {/* 3. Cards de resumo */}
+              <section className="grid gap-5 sm:grid-cols-3" aria-label="Resumo">
+                <CardResumo cor="azul" titulo="Atas vigentes" emoji="📄" numero={vigentes} detalhe={`${atas?.length ?? 0} no total`} />
+                <CardResumo cor="roxo" titulo="Eventos em andamento" emoji="📅" numero={emAndamento} detalhe={`${proximos.length} com data marcada`} />
+                <CardResumo cor="verde" titulo="Pendentes" emoji="⏳" numero={pendentes} detalhe="aguardam a equipe" />
+              </section>
+
+              {erro && <p className="rounded-2xl bg-rose-50 p-3 text-sm text-rose-800">Não foi possível carregar as atas. {erro}</p>}
+
+              {/* 4. Atas (cards horizontais) */}
+              <section aria-labelledby="titulo-atas">
+                <div className="mb-3.5 flex items-baseline justify-between gap-3">
+                  <h2 id="titulo-atas" className="text-lg font-semibold">
+                    {acesso.equipe ? 'Atas do órgão' : 'Suas atas'}
+                  </h2>
+                  <span className="text-[13px] text-slate-500">{atas === null ? 'Carregando…' : q ? `${lista.length} de ${atas.length}` : ''}</span>
+                </div>
+                <div className="space-y-3">
+                  {lista.map((l) => (
+                    <LinhaDeAta
+                      key={l.id}
+                      linha={l}
+                      base={bases.get(l.id)}
+                      hoje={hoje}
+                      abrir={() => irParaAta(l.id)}
+                      verArquivo={l.arquivo && acesso.equipe ? () => void abrirAnexoNoNavegador(conexaoPainel(cliente, l.id, orgao.id), l.arquivo!) : undefined}
+                      excluir={acesso.equipe ? () => void excluir(l) : undefined}
+                    />
+                  ))}
+                  {atas && atas.length === 0 && (
+                    <p className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-suave">
+                      {acesso.equipe ? 'Nenhuma ata cadastrada ainda. Use “+ Nova ata” para começar.' : 'Nenhuma ata liberada para você ainda.'}
+                    </p>
+                  )}
+                  {atas && atas.length > 0 && lista.length === 0 && <p className="rounded-2xl bg-white p-6 text-sm text-slate-500 shadow-suave">Nenhuma ata encontrada para “{busca}”.</p>}
+                </div>
+              </section>
+
+              {acesso.equipe && (mostrarNova || (atas !== null && atas.length === 0)) && (
+                <div ref={refNova}>
+                  <NovaAta aoContinuar={setRascunho} />
                 </div>
               )}
             </div>
-            {erro && (
-              <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-800">
-                Não foi possível carregar as atas. {erro}
-              </p>
-            )}
-            {atas && atas.length > 0 && (
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {lista.map((l) => (
-                  <CartaoAta
-                    key={l.id}
-                    linha={l}
-                    base={bases.get(l.id)}
-                    abrir={() => irParaAta(l.id)}
-                    verArquivo={l.arquivo && acesso.equipe ? () => void abrirAnexoNoNavegador(conexaoPainel(cliente, l.id, orgao.id), l.arquivo!) : undefined}
-                    excluir={acesso.equipe ? () => void excluir(l) : undefined}
-                  />
-                ))}
-              </div>
-            )}
-            {atas && atas.length === 0 && !acesso.equipe && <p className="text-sm text-slate-500">Nenhuma ata liberada para você ainda.</p>}
-            {acesso.equipe && <NovaAta aoContinuar={setRascunho} />}
-          </>
+
+            {/* 5. Painel lateral direito */}
+            <aside className="grid gap-6 sm:grid-cols-2 xl:grid-cols-1">
+              {acesso.equipe && (
+                <section className="rounded-[20px] bg-white p-5 shadow-suave">
+                  <h2 className="mb-4 text-base font-semibold">Ações rápidas</h2>
+                  <div className="space-y-3">
+                    <button
+                      onClick={() => {
+                        setMostrarNova(true);
+                        window.setTimeout(() => refNova.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+                      }}
+                      className="flex w-full items-center justify-between rounded-2xl bg-gradient-to-br from-violet-500 to-violet-700 px-5 py-4 text-left text-[15px] font-semibold text-white shadow-[0_10px_22px_-8px_rgba(122,77,242,0.6)] transition hover:-translate-y-0.5"
+                    >
+                      + Nova ata <FilePlus2 className="h-5 w-5 opacity-90" />
+                    </button>
+                    <button
+                      onClick={() => navegar('historico')}
+                      className="flex w-full items-center justify-between rounded-2xl bg-gradient-to-br from-[#ff8f7c] to-coral px-5 py-4 text-left text-[15px] font-semibold text-white shadow-[0_10px_22px_-8px_rgba(255,111,97,0.6)] transition hover:-translate-y-0.5"
+                    >
+                      Ver histórico <History className="h-5 w-5 opacity-90" />
+                    </button>
+                  </div>
+                </section>
+              )}
+              <section className="rounded-[20px] bg-white p-5 shadow-suave">
+                <h2 className="mb-4 text-base font-semibold">Próximos eventos</h2>
+                {proximos.length === 0 ? (
+                  <p className="text-sm text-slate-500">Nenhum evento com data marcada.</p>
+                ) : (
+                  <ol className="relative space-y-4 before:absolute before:bottom-2 before:left-[21px] before:top-2 before:w-0.5 before:bg-slate-100">
+                    {proximos.slice(0, 5).map(({ ataId, servico, ev }) => (
+                      <li key={`${ataId}-${ev.id}`}>
+                        <button onClick={() => irParaAta(ataId)} className="relative grid w-full grid-cols-[44px_minmax(0,1fr)] gap-3 text-left">
+                          <span className="z-[1] flex h-12 w-11 flex-col items-center justify-center rounded-2xl bg-gelo leading-tight ring-4 ring-white">
+                            <b className="text-base">{ev.dataInicio.slice(8, 10)}</b>
+                            <small className="text-[10px] uppercase tracking-wide text-slate-500">{MESES[Number(ev.dataInicio.slice(5, 7)) - 1]}</small>
+                          </span>
+                          <span className="min-w-0 self-center">
+                            <strong className="block truncate text-[13px] font-semibold">{ev.nome || ev.numero || 'Evento'}</strong>
+                            <span className="block truncate text-xs text-slate-500">
+                              {servico}
+                              {ev.local ? ` · ${ev.local}` : ''}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            </aside>
+          </div>
         )}
-      </main>
+      </div>
     </div>
   );
 }
@@ -841,7 +1037,7 @@ const salvarOrgao = (id: string) => {
 
 function EscolherOrgao({ email, acesso, escolher, sair }: { email: string; acesso: AcessoGeral; escolher: (id: string) => void; sair: () => void }) {
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+    <div className="min-h-screen bg-gelo text-slate-900 antialiased">
       <Topo email={email} sair={sair} />
       <main className="mx-auto max-w-[900px] space-y-4 px-4 py-8 sm:px-6">
         <h1 className="text-xl font-semibold">Escolha o órgão</h1>
@@ -937,7 +1133,7 @@ function ModoPainel({ cliente }: { cliente: SupabaseClient }) {
     }
     if (geral.plataforma && (escolhido === '__plataforma' || geral.orgaos.length === 0)) {
       return (
-        <div className="min-h-screen bg-slate-50 text-slate-900 antialiased">
+        <div className="min-h-screen bg-gelo text-slate-900 antialiased">
           <Topo email={email} sair={sair}>
             {geral.orgaos.length > 0 && (
               <Botao tamanho="sm" icone={<ArrowLeftRight className="h-3.5 w-3.5" />} onClick={() => escolher('')}>
