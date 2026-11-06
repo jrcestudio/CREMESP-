@@ -1,0 +1,12 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Fundo do menu lateral (R G B). Padrão: azul-marinho #16204a */
+  --sidebar-bg: 22 32 74;
+}
+
+body {
+  background: #f3f5f9;
+}
