@@ -36,6 +36,8 @@ import {
   Save,
   Search,
   Settings,
+  ShieldCheck,
+  Signature,
   Trash2,
   Unlock,
   Upload,
@@ -154,6 +156,8 @@ interface Andamento {
   acao?: string;
   mensagem?: string;
   anexos?: Anexo[];
+  /** Assinatura eletrônica do fornecedor ao confirmar o orçamento (resumo; o registro completo fica em painel_assinaturas) */
+  assinatura?: AssinaturaResumo;
 }
 
 /** Arquivo guardado no Supabase Storage (bucket "anexos") */
@@ -162,6 +166,17 @@ interface Anexo {
   caminho: string;
   tamanho: number;
   tipo: string;
+  /** SHA-256 do arquivo, calculado no navegador antes do envio */
+  sha256?: string;
+}
+
+interface AssinaturaResumo {
+  id: string;
+  nome: string;
+  /** CPF mascarado (***.123.456-**) */
+  cpf: string;
+  hash: string;
+  em: string;
 }
 
 type ComQuem = 'equipe' | 'fornecedor' | 'concluido';
@@ -897,7 +912,17 @@ function SeletorAnexos({ arquivos, setArquivos, disabled, rotulo = 'Anexar arqui
   );
 }
 
-function LinhaDoTempo({ historico, fornecedor = false, abrir }: { historico: Andamento[]; fornecedor?: boolean; abrir?: (a: Anexo) => void }) {
+function LinhaDoTempo({
+  historico,
+  fornecedor = false,
+  abrir,
+  verAssinatura,
+}: {
+  historico: Andamento[];
+  fornecedor?: boolean;
+  abrir?: (a: Anexo) => void;
+  verAssinatura?: (a: AssinaturaResumo) => void;
+}) {
   if (historico.length === 0) return <p className="text-sm text-slate-500">Nenhum andamento registrado ainda.</p>;
   return (
     <ol className="relative space-y-4 border-l border-slate-200 pl-5">
@@ -909,7 +934,9 @@ function LinhaDoTempo({ historico, fornecedor = false, abrir }: { historico: And
               ? 'Mensagem do fornecedor'
               : `Mensagem do ${identidade.sigla}`
             : h.acao === 'confirmar'
-              ? 'Fornecedor confirmou o orçamento'
+              ? h.assinatura
+                ? 'Fornecedor assinou e confirmou o orçamento'
+                : 'Fornecedor confirmou o orçamento'
               : h.acao === 'ajuste'
                 ? 'Fornecedor pediu ajuste'
                 : h.acao === 'nota_fiscal'
@@ -927,6 +954,7 @@ function LinhaDoTempo({ historico, fornecedor = false, abrir }: { historico: And
             </p>
             {h.mensagem && <p className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700">{h.mensagem}</p>}
             <ListaAnexos anexos={h.anexos ?? []} abrir={abrir} />
+            {h.assinatura && <SeloAssinatura a={h.assinatura} ver={verAssinatura} />}
           </li>
         );
       })}
@@ -2494,6 +2522,15 @@ function OrdemAba({
                 </div>
               ))}
             </div>
+            {(() => {
+              const ass = [...(evento.historico ?? [])].reverse().find((h) => h.assinatura)?.assinatura;
+              return ass ? (
+                <p className="mt-8 rounded border border-slate-300 px-3 py-2 text-[10px] text-slate-600">
+                  Orçamento assinado eletronicamente pelo fornecedor: <span className="font-semibold">{ass.nome}</span> (CPF {ass.cpf}) em {fmtDataHora(ass.em)}, com login e
+                  senha pessoais (Lei nº 14.063/2020). Código {ass.id} · SHA-256 <span className="break-all font-mono">{ass.hash}</span>
+                </p>
+              ) : null;
+            })()}
           </section>
         </article>
       </div>
@@ -2996,6 +3033,8 @@ function AndamentoAba({
   const [arquivos, setArquivos] = useState<File[]>([]);
   const [enviando, setEnviando] = useState(false);
   const abrir = cliente ? (a: Anexo) => void abrirAnexoNoNavegador(cliente, a) : undefined;
+  const [comprovante, setComprovante] = useState<AssinaturaResumo | null>(null);
+  const verAssinatura = cliente?.assinatura ? setComprovante : undefined;
   const etapaAtual = evento ? etapaDe(evento) : 'rascunho';
   const [alvo, setAlvo] = useState<Etapa>(PROXIMA_ETAPA[etapaAtual] ?? etapaAtual);
   const [mensagem, setMensagem] = useState('');
@@ -3330,6 +3369,25 @@ function AndamentoAba({
             </Card>
 
             {(() => {
+              const assinaturas = (evento.historico ?? []).filter((h) => h.assinatura).map((h) => h.assinatura!);
+              if (assinaturas.length === 0) return null;
+              return (
+                <Card className="border-emerald-200">
+                  <CardHeader
+                    titulo="Assinatura do fornecedor"
+                    subtitulo="Orçamento confirmado com assinatura eletrônica (nome, CPF, senha, data e hora, IP e hash do conteúdo)."
+                    icone={<ShieldCheck className="h-4 w-4" />}
+                  />
+                  <div className="space-y-2 p-5">
+                    {[...assinaturas].reverse().map((a) => (
+                      <SeloAssinatura key={a.id} a={a} ver={verAssinatura} />
+                    ))}
+                  </div>
+                </Card>
+              );
+            })()}
+
+            {(() => {
               const todos = anexosDoEvento(evento);
               if (todos.length === 0) return null;
               const notas = todos.filter((x) => x.h.acao === 'nota_fiscal');
@@ -3361,7 +3419,7 @@ function AndamentoAba({
             <Card>
               <CardHeader titulo="Histórico" subtitulo="Do mais recente para o mais antigo" icone={<FileText className="h-4 w-4" />} />
               <div className="p-5">
-                <LinhaDoTempo historico={evento.historico ?? []} abrir={abrir} />
+                <LinhaDoTempo historico={evento.historico ?? []} abrir={abrir} verAssinatura={verAssinatura} />
               </div>
             </Card>
           </div>
@@ -3369,6 +3427,7 @@ function AndamentoAba({
           <Card className="p-10 text-center text-sm text-slate-500">Escolha um evento na lista.</Card>
         )}
       </div>
+      {comprovante && cliente && <ComprovanteAssinatura conexao={cliente} resumo={comprovante} fechar={() => setComprovante(null)} />}
     </div>
   );
 }
@@ -3887,6 +3946,8 @@ export interface Conexao {
   rpcFornecedor: string;
   /** Script do Supabase que ativa os anexos (para mensagens de erro) */
   scriptAnexos: string;
+  /** O fornecedor assina eletronicamente ao confirmar o orçamento (tabela painel_assinaturas) */
+  assinatura?: boolean;
 }
 
 export function conexaoGestor(cliente: SupabaseClient): Conexao {
@@ -3904,6 +3965,7 @@ export function conexaoPainel(cliente: SupabaseClient, ataId: string, orgaoId: s
     prefixo: `${ataId}/`,
     rpcFornecedor: 'painel_fornecedor_acao',
     scriptAnexos: 'supabase/saas-configurar.sql',
+    assinatura: true,
   };
 }
 
@@ -3936,11 +3998,23 @@ export async function enviarArquivo(cx: Conexao, pasta: string, f: File): Promis
   return { nome: f.name, caminho, tamanho: f.size, tipo: f.type };
 }
 
+/** SHA-256 (hexadecimal) do arquivo; vazio se o navegador não suportar */
+async function sha256Arquivo(f: Blob): Promise<string> {
+  try {
+    const buf = await crypto.subtle.digest('SHA-256', await f.arrayBuffer());
+    return Array.from(new Uint8Array(buf), (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return '';
+  }
+}
+
 async function enviarAnexos(cx: Conexao, eventoId: string, arquivos: File[]): Promise<Anexo[]> {
   const enviados: Anexo[] = [];
   for (const f of arquivos) {
     if (f.size > LIMITE_ANEXO) throw new Error(`"${f.name}" passa de 20 MB.`);
-    enviados.push(await enviarArquivo(cx, `eventos/${eventoId}`, f));
+    const sha256 = await sha256Arquivo(f);
+    const a = await enviarArquivo(cx, `eventos/${eventoId}`, f);
+    enviados.push(sha256 ? { ...a, sha256 } : a);
   }
   return enviados;
 }
@@ -4328,6 +4402,379 @@ export function PainelEquipe({ conexao, meuEmail }: { conexao: Conexao; meuEmail
   );
 }
 
+// ---------------------------------------------------------------- Assinatura eletrônica do fornecedor
+// Assinatura eletrônica simples (Lei 14.063/2020, art. 4º, I): nome, CPF, declaração e senha do próprio
+// fornecedor. O banco grava data e hora, IP, navegador, e-mail, a cópia do orçamento e o hash SHA-256.
+// Para usar um provedor externo no futuro (ZapSign, Clicksign), a tabela já tem "metodo" e "provedor_*".
+
+export interface DadosAssinatura {
+  nome: string;
+  cpf: string;
+  cargo: string;
+  concordo: boolean;
+  declaracao: string;
+}
+
+interface RegistroAssinatura {
+  id: string;
+  ata_id: string;
+  evento_id: string;
+  metodo: string;
+  nome: string;
+  cpf: string;
+  cargo: string | null;
+  email: string;
+  autenticado_em: string | null;
+  assinado_em: string;
+  ip: string | null;
+  navegador: string | null;
+  declaracao: string;
+  hash: string;
+  conteudo: {
+    ata?: { numero?: string; fornecedor?: string; cnpj?: string };
+    evento?: { os?: string; nome?: string; dataInicio?: string; dataFim?: string; local?: string };
+    itens?: { codigo: string; descricao: string; unidade: string; qtd: number; diarias: number; valorUnitario: number; subtotal: number }[];
+    total?: number;
+    anexos?: Anexo[];
+    observacoes?: string;
+  };
+}
+
+export function cpfValido(valor: string): boolean {
+  const c = valor.replace(/\D/g, '');
+  if (c.length !== 11 || /^(\d)\1{10}$/.test(c)) return false;
+  const dv = (n: number) => {
+    let s = 0;
+    for (let i = 0; i < n; i++) s += Number(c[i]) * (n + 1 - i);
+    const d = (s * 10) % 11;
+    return d === 10 ? 0 : d;
+  };
+  return dv(9) === Number(c[9]) && dv(10) === Number(c[10]);
+}
+
+function formatarCpf(valor: string): string {
+  const c = valor.replace(/\D/g, '').slice(0, 11);
+  return c.replace(/^(\d{3})(\d)/, '$1.$2').replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+}
+
+function textoDeclaracao(ata: AtaInfo, evento: Evento, total: number): string {
+  return (
+    `Declaro, como representante de ${ata.fornecedor || 'o fornecedor'}${ata.cnpj ? ` (CNPJ ${ata.cnpj})` : ''}, que revisei e confirmo o orçamento ` +
+    `da OS ${evento.numero} – ${evento.nome}, referente à ${ata.numero || 'Ata de Registro de Preços'}, no valor total de ${brl(total)}, ` +
+    `com os itens, quantidades, diárias e valores apresentados, e que esta confirmação, feita com meu login e senha pessoais, ` +
+    `equivale à minha assinatura eletrônica (Lei nº 14.063/2020).`
+  );
+}
+
+function ModalAssinar({
+  conexao,
+  email,
+  ata,
+  evento,
+  total,
+  enviando,
+  fechar,
+  assinar,
+}: {
+  conexao: Conexao;
+  email: string;
+  ata: AtaInfo;
+  evento: Evento;
+  total: number;
+  enviando: boolean;
+  fechar: () => void;
+  assinar: (dados: DadosAssinatura) => Promise<boolean>;
+}) {
+  const chave = `assinatura-signatario:${email}`;
+  const [nome, setNome] = useState('');
+  const [cpf, setCpf] = useState('');
+  const [cargo, setCargo] = useState('');
+  const [senha, setSenha] = useState('');
+  const [concordo, setConcordo] = useState(false);
+  const [erro, setErro] = useState('');
+  const [conferindo, setConferindo] = useState(false);
+  const declaracao = textoDeclaracao(ata, evento, total);
+
+  // Lembra nome, CPF e cargo de quem assinou da última vez neste navegador
+  useEffect(() => {
+    try {
+      const salvo = JSON.parse(localStorage.getItem(chave) ?? 'null') as { nome?: string; cpf?: string; cargo?: string } | null;
+      if (salvo) {
+        setNome(salvo.nome ?? '');
+        setCpf(salvo.cpf ?? '');
+        setCargo(salvo.cargo ?? '');
+      }
+    } catch {
+      /* sem armazenamento local */
+    }
+  }, [chave]);
+
+  const ocupado = enviando || conferindo;
+  const confirmar = async () => {
+    const n = nome.trim().replace(/\s+/g, ' ');
+    if (n.length < 5 || !n.includes(' ')) return setErro('Informe o nome completo de quem assina.');
+    if (!cpfValido(cpf)) return setErro('CPF inválido. Confira os números.');
+    if (!concordo) return setErro('Marque "Li e concordo" para assinar.');
+    if (!senha) return setErro('Digite sua senha para confirmar a assinatura.');
+    setErro('');
+    setConferindo(true);
+    const { error } = await conexao.cliente.auth.signInWithPassword({ email, password: senha });
+    setConferindo(false);
+    if (error) return setErro(/invalid/i.test(error.message) ? 'Senha incorreta.' : `Não foi possível confirmar a senha. ${error.message}`);
+    try {
+      localStorage.setItem(chave, JSON.stringify({ nome: n, cpf, cargo: cargo.trim() }));
+    } catch {
+      /* sem armazenamento local */
+    }
+    const ok = await assinar({ nome: n, cpf: cpf.replace(/\D/g, ''), cargo: cargo.trim(), concordo, declaracao });
+    if (ok) fechar();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/40 p-4" data-print-hide>
+      <div className="my-auto w-full max-w-lg rounded-xl bg-white shadow-xl" role="dialog" aria-modal="true" aria-labelledby="titulo-assinar">
+        <div className="flex items-start justify-between border-b border-slate-100 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-xl bg-emerald-50 p-2 text-emerald-700">
+              <Signature className="h-4 w-4" />
+            </div>
+            <div>
+              <h3 id="titulo-assinar" className="text-base font-semibold text-slate-900">
+                Assinar e confirmar orçamento
+              </h3>
+              <p className="text-xs text-slate-500">
+                OS {evento.numero} · {evento.nome} · {brl(total)}
+              </p>
+            </div>
+          </div>
+          <button className="rounded p-1 text-slate-400 hover:bg-slate-100" onClick={fechar} disabled={ocupado} aria-label="Fechar">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="space-y-3 px-5 py-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Campo rotulo="Nome completo de quem assina" className="sm:col-span-2">
+              <input className={inputCls} value={nome} onChange={(e) => setNome(e.target.value)} autoComplete="name" disabled={ocupado} />
+            </Campo>
+            <Campo rotulo="CPF">
+              <input className={inputCls} value={cpf} onChange={(e) => setCpf(formatarCpf(e.target.value))} inputMode="numeric" placeholder="000.000.000-00" disabled={ocupado} />
+            </Campo>
+            <Campo rotulo="Cargo (opcional)">
+              <input className={inputCls} value={cargo} onChange={(e) => setCargo(e.target.value)} placeholder="Ex.: Sócio-administrador" disabled={ocupado} />
+            </Campo>
+          </div>
+          <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">{declaracao}</p>
+          <label className="flex items-start gap-2 text-sm text-slate-700">
+            <input type="checkbox" className="mt-0.5 h-4 w-4 rounded border-slate-300" checked={concordo} onChange={(e) => setConcordo(e.target.checked)} disabled={ocupado} />
+            <span>Li e concordo com a declaração acima.</span>
+          </label>
+          <Campo rotulo={`Senha de acesso (${email})`}>
+            <input
+              className={inputCls}
+              type="password"
+              value={senha}
+              onChange={(e) => {
+                setSenha(e.target.value);
+                setErro('');
+              }}
+              autoComplete="current-password"
+              disabled={ocupado}
+              onKeyDown={(e) => e.key === 'Enter' && void confirmar()}
+            />
+          </Campo>
+          <p className="text-xs text-slate-500">
+            Ficam registrados a data e a hora, o IP, o navegador, seu e-mail e o hash SHA-256 do orçamento e dos arquivos anexados. O {identidade.sigla} recebe o comprovante.
+          </p>
+          {erro && <p className="text-sm text-rose-700">{erro}</p>}
+        </div>
+        <div className="flex justify-end gap-2 border-t border-slate-100 px-5 py-3">
+          <Botao onClick={fechar} disabled={ocupado}>
+            Cancelar
+          </Botao>
+          <Botao variante="sucesso" icone={ocupado ? <Loader2 className="h-4 w-4 animate-spin" /> : <Signature className="h-4 w-4" />} disabled={ocupado} onClick={() => void confirmar()}>
+            Assinar e confirmar
+          </Botao>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const escHtml = (t: unknown) =>
+  String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string);
+
+function htmlComprovante(r: RegistroAssinatura, verif: { registroIntegro: boolean; orcamentoIgual: boolean } | null): string {
+  const c = r.conteudo;
+  const linha = (rot: string, val: unknown) => `<tr><th>${escHtml(rot)}</th><td>${escHtml(val)}</td></tr>`;
+  const itens = (c.itens ?? [])
+    .map(
+      (i) =>
+        `<tr><td>${escHtml(i.codigo)}</td><td>${escHtml(i.descricao)}<br><small>${escHtml(i.unidade)}</small></td><td class="n">${escHtml(num(i.qtd))}</td><td class="n">${escHtml(num(i.diarias))}</td><td class="n">${escHtml(brl(i.valorUnitario))}</td><td class="n">${escHtml(brl(i.subtotal))}</td></tr>`,
+    )
+    .join('');
+  const anexos = (c.anexos ?? []).map((a) => `<li>${escHtml(a.nome)} (${escHtml(tamanhoArquivo(a.tamanho))})${a.sha256 ? `<br><code>SHA-256 ${escHtml(a.sha256)}</code>` : ''}</li>`).join('');
+  return `<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Comprovante de assinatura · OS ${escHtml(c.evento?.os)}</title>
+<style>
+body{font:13px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#0f172a;margin:32px;max-width:820px}
+h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:#475569;margin:22px 0 6px}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #cbd5e1;padding:5px 8px;text-align:left;vertical-align:top}
+.dados th{width:210px;background:#f8fafc;font-weight:600}.itens th{background:#f8fafc}.n{text-align:right;white-space:nowrap}
+code{font-size:11px;word-break:break-all}.selo{border:2px solid #059669;border-radius:8px;padding:10px 14px;margin:16px 0;background:#ecfdf5}
+.alerta{border-color:#e11d48;background:#fff1f2}small{color:#64748b}.topo{display:flex;align-items:center;gap:12px;border-bottom:2px solid #0f172a;padding-bottom:10px}
+.topo img{height:40px}@media print{body{margin:12mm}}
+</style></head><body>
+<div class="topo">${identidade.logo ? `<img src="${escHtml(new URL(identidade.logo, window.location.href).href)}" alt="">` : ''}<div><h1>Comprovante de assinatura eletrônica</h1><div>${escHtml(identidade.nome || identidade.sigla)} · Portal do Fornecedor</div></div></div>
+<div class="selo${verif && !verif.registroIntegro ? ' alerta' : ''}">
+<strong>Orçamento confirmado e assinado eletronicamente</strong> por ${escHtml(r.nome)}, CPF ${escHtml(formatarCpf(r.cpf))}, em ${escHtml(fmtDataHora(r.assinado_em))}.<br>
+Assinatura eletrônica simples (Lei nº 14.063/2020, art. 4º, I), com login e senha pessoais do fornecedor.
+${verif ? `<br>Conferência em ${escHtml(fmtDataHora(new Date().toISOString()))}: registro ${verif.registroIntegro ? 'íntegro (hash confere)' : 'NÃO confere com o hash'}; orçamento ${verif.orcamentoIgual ? 'igual ao assinado' : 'foi alterado no sistema depois da assinatura'}.` : ''}
+</div>
+<h2>Signatário</h2><table class="dados">
+${linha('Nome', r.nome)}${linha('CPF', formatarCpf(r.cpf))}${r.cargo ? linha('Cargo', r.cargo) : ''}${linha('E-mail (login)', r.email)}
+${linha('Empresa', `${c.ata?.fornecedor ?? ''}${c.ata?.cnpj ? ` · CNPJ ${c.ata.cnpj}` : ''}`)}
+${linha('Data e hora da assinatura', fmtDataHora(r.assinado_em))}${r.autenticado_em ? linha('Senha confirmada em', fmtDataHora(r.autenticado_em)) : ''}
+${linha('Endereço IP', r.ip || 'não informado')}${linha('Navegador', r.navegador || 'não informado')}${linha('Método', 'Assinatura eletrônica simples (login, senha e declaração)')}
+${linha('Código da assinatura', r.id)}
+</table>
+<h2>Declaração aceita</h2><p>${escHtml(r.declaracao)}</p>
+<h2>Orçamento assinado</h2><table class="dados">
+${linha('Ata', c.ata?.numero)}${linha('OS / Evento', `OS ${c.evento?.os ?? ''} · ${c.evento?.nome ?? ''}`)}${linha('Período', periodo({ dataInicio: c.evento?.dataInicio ?? '', dataFim: c.evento?.dataFim ?? '' }))}${c.evento?.local ? linha('Local', c.evento.local) : ''}
+${c.observacoes ? linha('Observações do fornecedor', c.observacoes) : ''}
+</table>
+<table class="itens" style="margin-top:8px"><thead><tr><th>Item</th><th>Descrição</th><th class="n">Qtd.</th><th class="n">Diárias</th><th class="n">Unitário</th><th class="n">Subtotal</th></tr></thead>
+<tbody>${itens}</tbody><tfoot><tr><th colspan="5" class="n">Total</th><th class="n">${escHtml(brl(c.total ?? 0))}</th></tr></tfoot></table>
+${anexos ? `<h2>Arquivos enviados com a confirmação</h2><ul>${anexos}</ul>` : ''}
+<h2>Integridade</h2><p>Hash SHA-256 do conteúdo assinado (orçamento, arquivos, signatário, declaração e data):<br><code>${escHtml(r.hash)}</code></p>
+<p><small>O registro desta assinatura é guardado pelo sistema e não pode ser alterado nem apagado. Qualquer mudança no orçamento depois da assinatura é apontada na conferência.</small></p>
+</body></html>`;
+}
+
+function ComprovanteAssinatura({ conexao, resumo, fechar }: { conexao: Conexao; resumo: AssinaturaResumo; fechar: () => void }) {
+  const [reg, setReg] = useState<RegistroAssinatura | null>(null);
+  const [verif, setVerif] = useState<{ registroIntegro: boolean; orcamentoIgual: boolean } | null>(null);
+  const [erro, setErro] = useState('');
+
+  useEffect(() => {
+    let ativo = true;
+    void conexao.cliente
+      .from('painel_assinaturas')
+      .select('*')
+      .eq('id', resumo.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (!ativo) return;
+        if (error || !data) setErro(error?.message ?? 'Assinatura não encontrada.');
+        else setReg(data as RegistroAssinatura);
+      });
+    void conexao.cliente.rpc('painel_assinatura_verificar', { p_id: resumo.id }).then(({ data }) => {
+      if (ativo && data) setVerif(data as { registroIntegro: boolean; orcamentoIgual: boolean });
+    });
+    return () => {
+      ativo = false;
+    };
+  }, [conexao, resumo.id]);
+
+  const imprimir = () => {
+    if (!reg) return;
+    const janela = window.open('', '_blank');
+    if (!janela) return setErro('O navegador bloqueou a nova janela. Permita pop-ups para este site.');
+    janela.document.write(htmlComprovante(reg, verif));
+    janela.document.close();
+    janela.focus();
+    setTimeout(() => janela.print(), 300);
+  };
+  const baixarJson = () => {
+    if (!reg) return;
+    const blob = new Blob([JSON.stringify(reg, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `assinatura-OS-${reg.conteudo.evento?.os ?? reg.evento_id}-${reg.id.slice(0, 8)}.json`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  };
+
+  const Linha = ({ rot, val }: { rot: string; val: ReactNode }) => (
+    <div className="grid grid-cols-[150px_minmax(0,1fr)] gap-2 py-1.5 text-sm">
+      <dt className="text-slate-500">{rot}</dt>
+      <dd className="break-words text-slate-900">{val}</dd>
+    </div>
+  );
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/40 p-4" onClick={fechar} data-print-hide>
+      <div className="my-auto w-full max-w-xl rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <div className="flex items-start justify-between border-b border-slate-100 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 rounded-xl bg-emerald-50 p-2 text-emerald-700">
+              <ShieldCheck className="h-4 w-4" />
+            </div>
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">Comprovante de assinatura</h3>
+              <p className="text-xs text-slate-500">Assinatura eletrônica simples do fornecedor (Lei 14.063/2020)</p>
+            </div>
+          </div>
+          <button className="rounded p-1 text-slate-400 hover:bg-slate-100" onClick={fechar} aria-label="Fechar">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="px-5 py-4">
+          {erro && <p className="mb-3 text-sm text-rose-700">{erro}</p>}
+          {!reg && !erro && (
+            <p className="flex items-center gap-2 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+            </p>
+          )}
+          {reg && (
+            <>
+              {verif && (
+                <div className={`mb-3 rounded-lg px-3 py-2 text-sm ${verif.registroIntegro && verif.orcamentoIgual ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
+                  {verif.registroIntegro ? 'Registro íntegro: o hash confere.' : 'Atenção: o registro não confere com o hash.'}{' '}
+                  {verif.orcamentoIgual ? 'O orçamento no sistema é o mesmo que foi assinado.' : 'O orçamento foi alterado no sistema depois da assinatura.'}
+                </div>
+              )}
+              <dl className="divide-y divide-slate-100">
+                <Linha rot="Assinado por" val={`${reg.nome}${reg.cargo ? ` · ${reg.cargo}` : ''}`} />
+                <Linha rot="CPF" val={formatarCpf(reg.cpf)} />
+                <Linha rot="E-mail (login)" val={reg.email} />
+                <Linha rot="Data e hora" val={fmtDataHora(reg.assinado_em)} />
+                <Linha rot="IP" val={reg.ip || 'não informado'} />
+                <Linha rot="Orçamento" val={`OS ${reg.conteudo.evento?.os ?? ''} · ${reg.conteudo.evento?.nome ?? ''} · ${brl(reg.conteudo.total ?? 0)}`} />
+                {(reg.conteudo.anexos ?? []).length > 0 && <Linha rot="Arquivos" val={(reg.conteudo.anexos ?? []).map((a) => a.nome).join(', ')} />}
+                <Linha rot="Hash SHA-256" val={<code className="text-xs">{reg.hash}</code>} />
+              </dl>
+            </>
+          )}
+        </div>
+        <div className="flex flex-wrap justify-end gap-2 border-t border-slate-100 px-5 py-3">
+          <Botao icone={<Download className="h-4 w-4" />} disabled={!reg} onClick={baixarJson}>
+            Baixar dados (.json)
+          </Botao>
+          <Botao variante="primario" icone={<Printer className="h-4 w-4" />} disabled={!reg} onClick={imprimir}>
+            Imprimir ou salvar PDF
+          </Botao>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SeloAssinatura({ a, ver }: { a: AssinaturaResumo; ver?: (a: AssinaturaResumo) => void }) {
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-900">
+      <ShieldCheck className="h-4 w-4 shrink-0 text-emerald-700" />
+      <span className="min-w-0 flex-1">
+        Assinado eletronicamente por <strong>{a.nome}</strong> (CPF {a.cpf}) em {fmtDataHora(a.em)}
+      </span>
+      {ver && (
+        <button type="button" onClick={() => ver(a)} className="font-semibold text-emerald-800 underline-offset-2 hover:underline">
+          Ver comprovante
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------- Portal do fornecedor
 
 type AcaoFornecedor = 'confirmar' | 'ajuste' | 'mensagem' | 'nota_fiscal';
@@ -4357,6 +4804,8 @@ export function PortalFornecedor({
   const [arqNota, setArqNota] = useState<File[]>([]);
   const [abaPortal, setAbaPortal] = useState<'solicitado' | 'realizado'>('solicitado');
   const [enviando, setEnviando] = useState(false);
+  const [assinando, setAssinando] = useState(false);
+  const [comprovante, setComprovante] = useState<AssinaturaResumo | null>(null);
   const abrir = (a: Anexo) => void abrirAnexoNoNavegador(conexao, a);
   const [aviso, setAviso] = useState<{ tipo: 'ok' | 'erro'; texto: string } | null>(null);
 
@@ -4427,6 +4876,7 @@ export function PortalFornecedor({
     setArqMsg([]);
     setArqNota([]);
     setAviso(null);
+    setAssinando(false);
   }, [evento?.id]);
 
   const linhas = useMemo(() => {
@@ -4438,21 +4888,27 @@ export function PortalFornecedor({
   }, [evento, itensPorId]);
   const total = linhas.reduce((s, x) => s + consumoLinha(x.l) * x.it.valorUnitario, 0);
 
-  const agir = async (acao: AcaoFornecedor) => {
-    if (!evento) return;
+  const agir = async (acao: AcaoFornecedor, assinatura?: DadosAssinatura): Promise<boolean> => {
+    if (!evento) return false;
     const conteudo = (acao === 'mensagem' ? textoMsg : acao === 'nota_fiscal' ? textoNota : texto).trim();
     const arquivos = acao === 'mensagem' ? arqMsg : acao === 'nota_fiscal' ? arqNota : arqRevisao;
     if (acao === 'ajuste' && !conteudo) {
       setAviso({ tipo: 'erro', texto: 'Descreva o ajuste que precisa ser feito.' });
-      return;
+      return false;
     }
     if (acao === 'mensagem' && !conteudo && arquivos.length === 0) {
       setAviso({ tipo: 'erro', texto: 'Escreva a mensagem ou anexe um arquivo.' });
-      return;
+      return false;
     }
     if (acao === 'nota_fiscal' && arquivos.length === 0) {
       setAviso({ tipo: 'erro', texto: 'Anexe o arquivo da nota fiscal (PDF ou XML).' });
-      return;
+      return false;
+    }
+    // Confirmar o orçamento pede a assinatura eletrônica antes de enviar
+    if (acao === 'confirmar' && conexao.assinatura && !assinatura) {
+      setAviso(null);
+      setAssinando(true);
+      return false;
     }
     setEnviando(true);
     setAviso(null);
@@ -4462,16 +4918,23 @@ export function PortalFornecedor({
     } catch (err) {
       setEnviando(false);
       setAviso({ tipo: 'erro', texto: err instanceof Error ? err.message : String(err) });
-      return;
+      return false;
     }
     const params: Record<string, unknown> = { p_evento: evento.id, p_acao: acao, p_mensagem: conteudo };
     if (conexao.ataId) params.p_ata = conexao.ataId;
     if (anexos.length) params.p_anexos = anexos;
+    if (assinatura) params.p_assinatura = assinatura;
     const { data, error } = await cliente.rpc(conexao.rpcFornecedor, params);
     setEnviando(false);
     if (error) {
-      setAviso({ tipo: 'erro', texto: `Não foi possível enviar. ${error.message}` });
-      return;
+      const semScript = assinatura && /p_assinatura|could not find the function|schema cache/i.test(error.message);
+      setAviso({
+        tipo: 'erro',
+        texto: semScript
+          ? `A assinatura eletrônica ainda não foi ativada pelo ${identidade.sigla} (script supabase/saas-assinatura.sql). Avise a equipe.`
+          : `Não foi possível enviar. ${error.message}`,
+      });
+      return false;
     }
     if (data) setBase((b) => ({ ...b, eventos: b.eventos.map((e) => (e.id === evento.id ? (data as Evento) : e)) }));
     if (acao === 'mensagem') {
@@ -4488,13 +4951,16 @@ export function PortalFornecedor({
       tipo: 'ok',
       texto:
         acao === 'confirmar'
-          ? `Orçamento confirmado. O ${identidade.sigla} já foi avisado no painel.`
+          ? assinatura
+            ? `Orçamento assinado e confirmado. O ${identidade.sigla} já recebeu o comprovante.`
+            : `Orçamento confirmado. O ${identidade.sigla} já foi avisado no painel.`
           : acao === 'ajuste'
             ? `Pedido de ajuste enviado ao ${identidade.sigla}.`
             : acao === 'nota_fiscal'
               ? `Nota fiscal enviada ao ${identidade.sigla}.`
               : `Mensagem enviada ao ${identidade.sigla}.`,
     });
+    return true;
   };
 
   const Secao = ({ titulo, lista, vazio }: { titulo: string; lista: Evento[]; vazio: string }) => (
@@ -4632,7 +5098,9 @@ export function PortalFornecedor({
                   {etapa === 'revisao_fornecedor' && (
                     <div data-print-hide className="space-y-3 border-b border-amber-100 bg-amber-50 px-5 py-4">
                       <p className="text-sm font-medium text-amber-900">O {identidade.sigla} pede que vocês revisem este orçamento.</p>
-                      <p className="text-sm text-amber-800">Confira itens, quantidades e diárias. Se estiver tudo certo, confirme. Se precisar mudar algo, descreva o ajuste.</p>
+                      <p className="text-sm text-amber-800">
+                        Confira itens, quantidades e diárias. Se estiver tudo certo, confirme{conexao.assinatura ? ' com sua assinatura eletrônica (nome, CPF e senha)' : ''}. Se precisar mudar algo, descreva o ajuste.
+                      </p>
                       <textarea
                         className={`${inputCls} min-h-[70px]`}
                         value={texto}
@@ -4641,8 +5109,8 @@ export function PortalFornecedor({
                       />
                       <SeletorAnexos arquivos={arqRevisao} setArquivos={setArqRevisao} disabled={enviando} rotulo="Anexar orçamento ou arquivos" />
                       <div className="flex flex-wrap gap-2">
-                        <Botao variante="sucesso" icone={<CheckCircle2 className="h-4 w-4" />} disabled={enviando} onClick={() => void agir('confirmar')}>
-                          Confirmar orçamento
+                        <Botao variante="sucesso" icone={conexao.assinatura ? <Signature className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />} disabled={enviando} onClick={() => void agir('confirmar')}>
+                          {conexao.assinatura ? 'Assinar e confirmar orçamento' : 'Confirmar orçamento'}
                         </Botao>
                         <Botao variante="perigo" icone={<Pencil className="h-4 w-4" />} disabled={enviando} onClick={() => void agir('ajuste')}>
                           Pedir ajuste
@@ -4733,7 +5201,7 @@ export function PortalFornecedor({
                   <Card>
                     <CardHeader titulo="Andamento" subtitulo={`Cada etapa registrada pelo ${identidade.sigla} e por vocês`} icone={<ListChecks className="h-4 w-4" />} />
                     <div className="p-5">
-                      <LinhaDoTempo historico={evento.historico ?? []} fornecedor abrir={abrir} />
+                      <LinhaDoTempo historico={evento.historico ?? []} fornecedor abrir={abrir} verAssinatura={setComprovante} />
                     </div>
                   </Card>
                   <Card data-print-hide>
@@ -4752,6 +5220,19 @@ export function PortalFornecedor({
           </div>
         )}
       </main>
+      {assinando && evento && (
+        <ModalAssinar
+          conexao={conexao}
+          email={email}
+          ata={ata}
+          evento={evento}
+          total={total}
+          enviando={enviando}
+          fechar={() => setAssinando(false)}
+          assinar={(dados) => agir('confirmar', dados)}
+        />
+      )}
+      {comprovante && <ComprovanteAssinatura conexao={conexao} resumo={comprovante} fechar={() => setComprovante(null)} />}
     </div>
   );
 }
