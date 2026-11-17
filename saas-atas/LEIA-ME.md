@@ -53,7 +53,8 @@ Quem é de mais de um órgão (ou você, se entrar na equipe de um cliente para 
 ## Assinatura eletrônica do fornecedor
 
 Quando o fornecedor **confirma o orçamento** no portal, ele assina eletronicamente (assinatura eletrônica simples,
-Lei 14.063/2020): informa nome completo, CPF e cargo, marca "Li e concordo" na declaração e digita a própria senha.
+Lei 14.063/2020): informa nome completo, CPF e cargo, envia a imagem da assinatura (PNG; fica lembrada no navegador
+para a próxima vez), marca "Li e concordo" na declaração e digita a própria senha.
 O banco grava, numa tabela que ninguém consegue alterar nem apagar (`painel_assinaturas`): data e hora, IP, navegador,
 e-mail e usuário, a cópia exata do orçamento (itens, quantidades, diárias, valores, total e arquivos anexados, com o
 SHA-256 de cada arquivo) e o hash SHA-256 de tudo isso. O resto do fluxo não muda: pedir ajuste, mensagens e nota
@@ -61,7 +62,8 @@ fiscal continuam sem assinatura.
 
 A equipe vê o selo "Assinado eletronicamente por…" em *Eventos e andamento* e no histórico, abre o **comprovante**
 (que confere se o registro está íntegro e se o orçamento mudou depois da assinatura) e pode **imprimir/salvar em PDF**
-ou baixar os dados em .json. A Ordem de Orçamento impressa também traz a linha da assinatura.
+ou baixar os dados em .json. A imagem da assinatura aparece no campo "De acordo – Fornecedor" da Ordem de Orçamento, junto com a linha da
+assinatura eletrônica.
 
 Para trocar por assinatura avançada (ZapSign, Clicksign) no futuro, a tabela já tem as colunas `metodo` e
 `provedor_ref`, `provedor_status`, `provedor_dados`.

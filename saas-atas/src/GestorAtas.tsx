@@ -1304,6 +1304,7 @@ export function AppGestor({
               atualizar={atualizarEvento}
               avisar={avisar}
               irParaSimulador={() => setAba('simulador')}
+              cliente={cliente}
             />
           )}
           {aba === 'relatorios' && (
@@ -2235,7 +2236,9 @@ function OrdemAba({
   atualizar,
   avisar,
   irParaSimulador,
+  cliente,
 }: {
+  cliente?: Conexao | null;
   ata: AtaInfo;
   eventos: Evento[];
   evento: Evento | null;
@@ -2261,6 +2264,8 @@ function OrdemAba({
 
   const ehOS = evento.status === 'aprovado';
   const tituloDoc = ehOS ? 'ORDEM DE SERVIÇO / FORNECIMENTO' : 'ORDEM DE ORÇAMENTO';
+  /** Última assinatura eletrônica do fornecedor neste evento (a imagem vai para o campo dele) */
+  const assFornecedor = [...(evento.historico ?? [])].reverse().find((h) => h.assinatura)?.assinatura;
 
   const grupos = (() => {
     const porModulo = new Map<string, { it: ItemAta; l: LinhaEvento; subtotal: number }[]>();
@@ -2506,7 +2511,7 @@ function OrdemAba({
             <p className="mb-10 text-right text-[11px]">
               {ata.cidade || identidade.cidade || '________'}, {dataPorExtenso(hojeISO())}.
             </p>
-            <div className="grid grid-cols-2 gap-x-10 gap-y-12 text-center text-[10.5px]">
+            <div className="grid grid-cols-2 gap-x-10 gap-y-16 text-center text-[10.5px]">
               {[
                 ['Responsável técnico do evento', evento.responsavel || ata.responsavelTecnico || 'Contratante'],
                 ['Gestor(a) da Ata', ata.gestor || 'Contratante'],
@@ -2514,7 +2519,10 @@ function OrdemAba({
                 [ehOS ? 'Ciente – Fornecedor' : 'De acordo – Fornecedor', ata.fornecedor],
                 [ata.cargoCoordenador || 'Autoridade competente', ata.coordenador || ata.contratante || 'Contratante'],
               ].map(([cargo, nome], i) => (
-                <div key={cargo} className={i === 4 ? 'col-span-2 mx-auto w-1/2' : ''}>
+                <div key={cargo} className={`relative ${i === 4 ? 'col-span-2 mx-auto w-1/2' : ''}`}>
+                  {i === 3 && assFornecedor && cliente?.assinatura && (
+                    <ImagemAssinatura conexao={cliente} id={assFornecedor.id} className="absolute bottom-full left-1/2 mb-0.5 h-12 max-w-[220px] -translate-x-1/2" />
+                  )}
                   <div className="border-t border-slate-800 pt-1.5">
                     <p className="font-semibold">{nome}</p>
                     <p className="text-slate-600">{cargo}</p>
@@ -2523,7 +2531,7 @@ function OrdemAba({
               ))}
             </div>
             {(() => {
-              const ass = [...(evento.historico ?? [])].reverse().find((h) => h.assinatura)?.assinatura;
+              const ass = assFornecedor;
               return ass ? (
                 <p className="mt-8 rounded border border-slate-300 px-3 py-2 text-[10px] text-slate-600">
                   Orçamento assinado eletronicamente pelo fornecedor: <span className="font-semibold">{ass.nome}</span> (CPF {ass.cpf}) em {fmtDataHora(ass.em)}, com login e
@@ -4413,6 +4421,8 @@ export interface DadosAssinatura {
   cargo: string;
   concordo: boolean;
   declaracao: string;
+  /** Imagem da assinatura em PNG (data URL) */
+  imagem: string;
 }
 
 interface RegistroAssinatura {
@@ -4430,6 +4440,7 @@ interface RegistroAssinatura {
   navegador: string | null;
   declaracao: string;
   hash: string;
+  imagem: string | null;
   conteudo: {
     ata?: { numero?: string; fornecedor?: string; cnpj?: string };
     evento?: { os?: string; nome?: string; dataInicio?: string; dataFim?: string; local?: string };
@@ -4455,6 +4466,52 @@ export function cpfValido(valor: string): boolean {
 function formatarCpf(valor: string): string {
   const c = valor.replace(/\D/g, '').slice(0, 11);
   return c.replace(/^(\d{3})(\d)/, '$1.$2').replace(/^(\d{3})\.(\d{3})(\d)/, '$1.$2.$3').replace(/\.(\d{3})(\d{1,2})$/, '.$1-$2');
+}
+
+/** Lê a imagem da assinatura e devolve um PNG reduzido (até 600 × 200), mantendo o fundo transparente */
+function prepararImagemAssinatura(arquivo: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!/^image\/(png|jpeg|webp)$/.test(arquivo.type)) return reject(new Error('Envie a assinatura em PNG (ou JPG).'));
+    if (arquivo.size > 8 * 1024 * 1024) return reject(new Error('Imagem grande demais (máximo 8 MB).'));
+    const url = URL.createObjectURL(arquivo);
+    const img = new Image();
+    img.onload = () => {
+      const escala = Math.min(1, 600 / img.width, 200 / img.height);
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.width * escala));
+      c.height = Math.max(1, Math.round(img.height * escala));
+      c.getContext('2d')?.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      const png = c.toDataURL('image/png');
+      if (png.length > 700000) reject(new Error('A imagem ficou grande demais. Use um PNG menor.'));
+      else resolve(png);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Não foi possível ler a imagem.'));
+    };
+    img.src = url;
+  });
+}
+
+/** Imagem da assinatura do fornecedor (busca no banco pelo código da assinatura) */
+function ImagemAssinatura({ conexao, id, className = '' }: { conexao: Conexao; id: string; className?: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let ativo = true;
+    void conexao.cliente
+      .from('painel_assinaturas')
+      .select('imagem')
+      .eq('id', id)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (ativo) setSrc((data as { imagem?: string | null } | null)?.imagem ?? null);
+      });
+    return () => {
+      ativo = false;
+    };
+  }, [conexao, id]);
+  return src ? <img src={src} alt="Assinatura do fornecedor" className={`object-contain ${className}`} /> : null;
 }
 
 function textoDeclaracao(ata: AtaInfo, evento: Evento, total: number): string {
@@ -4490,6 +4547,7 @@ function ModalAssinar({
   const [cpf, setCpf] = useState('');
   const [cargo, setCargo] = useState('');
   const [senha, setSenha] = useState('');
+  const [imagem, setImagem] = useState('');
   const [concordo, setConcordo] = useState(false);
   const [erro, setErro] = useState('');
   const [conferindo, setConferindo] = useState(false);
@@ -4498,11 +4556,12 @@ function ModalAssinar({
   // Lembra nome, CPF e cargo de quem assinou da última vez neste navegador
   useEffect(() => {
     try {
-      const salvo = JSON.parse(localStorage.getItem(chave) ?? 'null') as { nome?: string; cpf?: string; cargo?: string } | null;
+      const salvo = JSON.parse(localStorage.getItem(chave) ?? 'null') as { nome?: string; cpf?: string; cargo?: string; imagem?: string } | null;
       if (salvo) {
         setNome(salvo.nome ?? '');
         setCpf(salvo.cpf ?? '');
         setCargo(salvo.cargo ?? '');
+        setImagem(salvo.imagem?.startsWith('data:image/png;base64,') ? salvo.imagem : '');
       }
     } catch {
       /* sem armazenamento local */
@@ -4514,6 +4573,7 @@ function ModalAssinar({
     const n = nome.trim().replace(/\s+/g, ' ');
     if (n.length < 5 || !n.includes(' ')) return setErro('Informe o nome completo de quem assina.');
     if (!cpfValido(cpf)) return setErro('CPF inválido. Confira os números.');
+    if (!imagem) return setErro('Envie a imagem da sua assinatura (PNG).');
     if (!concordo) return setErro('Marque "Li e concordo" para assinar.');
     if (!senha) return setErro('Digite sua senha para confirmar a assinatura.');
     setErro('');
@@ -4522,11 +4582,11 @@ function ModalAssinar({
     setConferindo(false);
     if (error) return setErro(/invalid/i.test(error.message) ? 'Senha incorreta.' : `Não foi possível confirmar a senha. ${error.message}`);
     try {
-      localStorage.setItem(chave, JSON.stringify({ nome: n, cpf, cargo: cargo.trim() }));
+      localStorage.setItem(chave, JSON.stringify({ nome: n, cpf, cargo: cargo.trim(), imagem }));
     } catch {
       /* sem armazenamento local */
     }
-    const ok = await assinar({ nome: n, cpf: cpf.replace(/\D/g, ''), cargo: cargo.trim(), concordo, declaracao });
+    const ok = await assinar({ nome: n, cpf: cpf.replace(/\D/g, ''), cargo: cargo.trim(), concordo, declaracao, imagem });
     if (ok) fechar();
   };
 
@@ -4562,6 +4622,36 @@ function ModalAssinar({
             <Campo rotulo="Cargo (opcional)">
               <input className={inputCls} value={cargo} onChange={(e) => setCargo(e.target.value)} placeholder="Ex.: Sócio-administrador" disabled={ocupado} />
             </Campo>
+          </div>
+          <div>
+            <span className="mb-1 block text-xs font-medium text-slate-600">Imagem da sua assinatura (PNG, de preferência com fundo transparente)</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex h-20 w-56 items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white p-2">
+                {imagem ? <img src={imagem} alt="Sua assinatura" className="max-h-full max-w-full object-contain" /> : <span className="text-xs text-slate-400">Nenhuma imagem</span>}
+              </div>
+              <label className={`inline-flex cursor-pointer items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-slate-700 ring-1 ring-inset ring-slate-300 hover:bg-slate-50 ${ocupado ? 'pointer-events-none opacity-50' : ''}`}>
+                <Upload className="h-4 w-4" />
+                {imagem ? 'Trocar imagem' : 'Enviar imagem'}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg"
+                  className="sr-only"
+                  disabled={ocupado}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (!f) return;
+                    prepararImagemAssinatura(f)
+                      .then((png) => {
+                        setImagem(png);
+                        setErro('');
+                      })
+                      .catch((err: Error) => setErro(err.message));
+                  }}
+                />
+              </label>
+            </div>
+            <p className="mt-1 text-xs text-slate-500">Ela aparece no campo do fornecedor na Ordem de Orçamento.</p>
           </div>
           <p className="rounded-lg bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">{declaracao}</p>
           <label className="flex items-start gap-2 text-sm text-slate-700">
@@ -4630,6 +4720,7 @@ Assinatura eletrônica simples (Lei nº 14.063/2020, art. 4º, I), com login e s
 ${verif ? `<br>Conferência em ${escHtml(fmtDataHora(new Date().toISOString()))}: registro ${verif.registroIntegro ? 'íntegro (hash confere)' : 'NÃO confere com o hash'}; orçamento ${verif.orcamentoIgual ? 'igual ao assinado' : 'foi alterado no sistema depois da assinatura'}.` : ''}
 </div>
 <h2>Signatário</h2><table class="dados">
+${r.imagem && /^data:image\/png;base64,/.test(r.imagem) ? `<tr><th>Assinatura</th><td><img src="${r.imagem}" alt="Assinatura" style="max-height:80px;max-width:300px"></td></tr>` : ''}
 ${linha('Nome', r.nome)}${linha('CPF', formatarCpf(r.cpf))}${r.cargo ? linha('Cargo', r.cargo) : ''}${linha('E-mail (login)', r.email)}
 ${linha('Empresa', `${c.ata?.fornecedor ?? ''}${c.ata?.cnpj ? ` · CNPJ ${c.ata.cnpj}` : ''}`)}
 ${linha('Data e hora da assinatura', fmtDataHora(r.assinado_em))}${r.autenticado_em ? linha('Senha confirmada em', fmtDataHora(r.autenticado_em)) : ''}
@@ -4734,6 +4825,7 @@ function ComprovanteAssinatura({ conexao, resumo, fechar }: { conexao: Conexao; 
                 </div>
               )}
               <dl className="divide-y divide-slate-100">
+                {reg.imagem && <Linha rot="Assinatura" val={<img src={reg.imagem} alt="Assinatura" className="h-16 max-w-[260px] object-contain" />} />}
                 <Linha rot="Assinado por" val={`${reg.nome}${reg.cargo ? ` · ${reg.cargo}` : ''}`} />
                 <Linha rot="CPF" val={formatarCpf(reg.cpf)} />
                 <Linha rot="E-mail (login)" val={reg.email} />

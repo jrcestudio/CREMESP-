@@ -6,8 +6,9 @@
 -- O que faz:
 --   * Cria a função do portal do fornecedor (confirmar orçamento, pedir ajuste, mensagem, nota fiscal).
 --   * Ao CONFIRMAR o orçamento, o fornecedor assina eletronicamente (assinatura eletrônica simples,
---     Lei 14.063/2020, art. 4º, I): informa nome e CPF, marca a declaração "li e concordo" e confirma
---     com a própria senha. O banco grava data e hora, IP, navegador, e-mail e usuário logado, a cópia
+--     Lei 14.063/2020, art. 4º, I): informa nome e CPF, envia a imagem da assinatura (PNG), marca a
+--     declaração "li e concordo" e confirma com a própria senha. A imagem vai para o campo do
+--     fornecedor na Ordem de Orçamento. O banco grava data e hora, IP, navegador, e-mail e usuário logado, a cópia
 --     exata do orçamento assinado (itens, quantidades, diárias, valores e arquivos anexados) e o
 --     hash SHA-256 desse conteúdo. O registro não pode ser alterado nem apagado.
 --   * Pedir ajuste, mensagens e nota fiscal continuam como antes, sem assinatura.
@@ -42,6 +43,9 @@ create table if not exists public.painel_assinaturas (
   provedor_status text,
   provedor_dados jsonb
 );
+-- Imagem da assinatura (PNG em data URL), mostrada no campo do fornecedor na Ordem de Orçamento
+alter table public.painel_assinaturas add column if not exists imagem text;
+
 create index if not exists painel_assinaturas_evento on public.painel_assinaturas (ata_id, evento_id, assinado_em desc);
 
 -- Ninguém apaga nem altera a assinatura; só as colunas do provedor externo podem ser atualizadas
@@ -199,6 +203,7 @@ declare
   ass_cpf text;
   ass_cargo text;
   ass_decl text;
+  ass_img text;
   ass_conteudo jsonb;
   ass_hash text;
   ass_ip text;
@@ -286,6 +291,13 @@ begin
     if not public.cpf_valido(ass_cpf) then
       raise exception 'CPF inválido.';
     end if;
+    ass_img := coalesce(p_assinatura ->> 'imagem', '');
+    if ass_img !~ '^data:image/png;base64,[A-Za-z0-9+/]+=*$' then
+      raise exception 'Envie a imagem da sua assinatura em PNG.';
+    end if;
+    if length(ass_img) > 700000 then
+      raise exception 'A imagem da assinatura é grande demais (máximo 500 KB).';
+    end if;
     if coalesce((p_assinatura ->> 'concordo')::boolean, false) is not true or ass_decl = '' then
       raise exception 'Marque a declaração "Li e concordo" para assinar.';
     end if;
@@ -302,6 +314,7 @@ begin
         'anexos', anexos,
         'observacoes', msg,
         'signatario', jsonb_build_object('nome', ass_nome, 'cpf', ass_cpf, 'cargo', ass_cargo, 'email', public.meu_email()),
+        'imagemAssinaturaSha256', encode(sha256(decode(substr(ass_img, 23), 'base64')), 'hex'),
         'declaracao', ass_decl,
         'assinadoEm', to_jsonb(ass_em)
       );
@@ -317,10 +330,10 @@ begin
 
     insert into public.painel_assinaturas (
       orgao_id, ata_id, evento_id, historico_id, nome, cpf, cargo, email, usuario_id, autenticado_em,
-      assinado_em, ip, navegador, declaracao, conteudo, hash
+      assinado_em, ip, navegador, declaracao, conteudo, hash, imagem
     ) values (
       public.orgao_da_ata(p_ata), p_ata, p_evento, entrada_id, ass_nome, ass_cpf, ass_cargo, public.meu_email(), auth.uid(), ass_auth,
-      ass_em, ass_ip, left(public.cabecalho_requisicao('user-agent'), 400), ass_decl, ass_conteudo, ass_hash
+      ass_em, ass_ip, left(public.cabecalho_requisicao('user-agent'), 400), ass_decl, ass_conteudo, ass_hash, ass_img
     )
     returning id into ass_id;
   end if;
