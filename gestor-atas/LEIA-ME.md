@@ -41,6 +41,20 @@ Os demais arquivos (`main.tsx`, `index.css`, configs) só montam o projeto.
   envia a **nota fiscal** pelo portal, e ela aparece em destaque para a equipe em *Anexos do evento*.
 - Para ativar no banco, rode `supabase/portal-fornecedor.sql` e depois `supabase/anexos.sql` (passo a passo em COMPARTILHAR-COM-O-SETOR.md).
 
+
+## Assinatura eletrônica do fornecedor
+
+Quando o fornecedor **confirma o orçamento** no portal, ele assina eletronicamente (assinatura eletrônica simples,
+Lei 14.063/2020): informa nome completo, CPF e cargo, envia a **imagem da assinatura em PNG** (fica lembrada no navegador),
+marca "Li e concordo" na declaração e digita a própria senha. O banco grava, numa tabela que ninguém altera nem apaga
+(`assinaturas`): data e hora, IP, navegador, e-mail, a imagem, a cópia exata do orçamento (itens, quantidades, diárias,
+valores, total e anexos com SHA-256) e o hash SHA-256 de tudo. Pedir ajuste, mensagens e nota fiscal continuam iguais.
+
+A imagem aparece no campo "De acordo – Fornecedor" da Ordem de Orçamento, junto com a linha da assinatura eletrônica.
+Em *Eventos e andamento* a equipe vê o selo e abre o comprovante (confere a integridade e se o orçamento mudou depois;
+imprime/salva em PDF ou baixa em .json). Para ativar, rode uma vez [`supabase/assinatura.sql`](supabase/assinatura.sql)
+no Supabase, depois do `anexos.sql`. As colunas `metodo` e `provedor_*` ficam prontas para ZapSign/Clicksign no futuro.
+
 ## Relatórios
 
 - A aba **Relatórios** agrupa os eventos por **mês, trimestre ou semestre** (pela data de início do evento).
